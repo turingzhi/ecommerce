@@ -2,9 +2,17 @@
 
 This learning project connects core C# and backend concepts. Start with one application and one database. Add infrastructure when requirements justify it.
 
-## New-thread handoff — 2026-10-01
+## Project summary
 
-**Resume here:** Stages 1–4 are implemented and Stage 5 reliable messaging is working locally. The next learning step is Outbox retry policy and dead-letter handling, then measured query performance. Real payment providers and external brokers remain deferred.
+This is a completed **local backend learning prototype**, not a deployed store. It is one ASP.NET Core (.NET 10) API backed by SQLite and EF Core. A customer can register, log in, create a multi-item order, list or retrieve their own orders, and create a payment attempt through HTTP. Checkout reserves stock, snapshots prices, and records an Outbox event in one transaction. Idempotency keys make repeated order and payment requests safe to replay.
+
+Service-level simulations cover payment success, failure, and unknown outcomes; partial refunds; cancellation; and expiration of unpaid orders. Background workers expire orders and dispatch Outbox messages with retries and dead-letter handling. The publisher and consumer run locally; no real payment provider or message broker is connected. The custom verification runner checks 362 service/database assertions.
+
+The API uses DTOs for its HTTP responses and provides example requests in `Http/`. `GET /health` checks database connectivity. Docker files provide a persistent SQLite volume, and GitHub Actions is configured to build and verify pushes and pull requests. Docker execution and a GitHub-hosted CI run have not been verified in this workspace. There is no automatic deployment (CD).
+
+## New-thread handoff — 2026-10-02
+
+**Current state:** The local backend learning project is complete through checkout, Identity, payment/refund simulations, expiration, and reliable Outbox delivery. DTOs, example HTTP requests, a database health endpoint, Docker configuration, and a GitHub Actions verification workflow are present. The learner chose to skip hands-on query performance and Docker runtime checks. Real payment providers, external brokers, image storage, deployment, and scaling remain optional future extensions.
 
 Learning preferences:
 
@@ -12,7 +20,7 @@ Learning preferences:
 - Give instructions first; let the learner write code. Provide examples or skeletons when requested. Edit implementation only when asked to do so.
 - When asked to check code, read the saved relevant file; editor changes may not yet be saved. Distinguish review/build success from behavior tested at runtime.
 - Keep context and output small: inspect relevant methods, avoid repeated whole-file reads, and run meaningful checks after substantive changes rather than every tiny edit.
-- The user uses Postman for manual HTTP testing and the custom verification runner for service/database checks.
+- The user uses Postman or the `Http/` files for manual HTTP testing and the custom verification runner for service/database checks.
 
 Verification covers creation, success/replay, failure/replay/retry, and timeout resolution in both directions. See the Verify section for the latest run. These are local service simulations; no real provider exists.
 
@@ -20,13 +28,17 @@ Read these files as needed:
 
 | File | Role |
 |---|---|
-| `Program.cs` | Identity registration, scoped services, startup migrations/seeding, protected order and payment endpoints |
+| `Program.cs` | Service registration, startup migrations/seeding, and endpoint mapping |
+| `Endpoints/` | Auth, order, payment, and health HTTP routes |
+| `Dtos/` | HTTP request and response shapes |
+| `Http/` | Example requests for manual testing |
 | `Services/OrderService.cs` | Checkout, cancellation, and expiration service |
 | `Data/ShopDb.cs` | EF Core context and model configuration |
-| `models/` | Order, payment, refund, Outbox, and processed-message entities |
+| `Models/` | Order, payment, refund, Outbox, and processed-message entities |
 | `Services/PaymentService.cs` | Pending payment creation and PaymentResult record |
 | `Verification/` | Feature-focused custom verification scenarios and runner |
-| `Migrations/` | InitialCommerceWithIdentity, AddPayments and model snapshot |
+| `Migrations/` | Commerce, payment, refund, processed-message, and Outbox retry migrations |
+| `.github/workflows/ecommerce.yml` | Build and verification on GitHub pushes and pull requests |
 
 Some source comments/TODOs predate completed changes (for example copying payment currency is already implemented). Check executable code before treating comments as outstanding work. Other workspace projects (`GameStore`, `test/IssueTracker`) are separate learning projects.
 
@@ -48,7 +60,7 @@ flowchart TD
     CDN --> Client
 ```
 
-This diagram is the target architecture. Authentication, checkout, payment/refund simulations, expiration, Outbox delivery, retry metadata, and consumer deduplication are implemented locally. Redis, carts, external brokers, images, and CDN remain planned extensions. This is a local learning project.
+This diagram is the target architecture. Authentication, checkout, payment/refund simulations, expiration, Outbox delivery, retry metadata, and consumer deduplication are implemented locally. Redis is not installed or used: SQLite remains the source of truth, and the current workload has no measured caching need. Carts, external brokers, images, and CDN also remain optional extensions. This is a local learning project.
 
 ## Current progress
 
@@ -56,11 +68,13 @@ This diagram is the target architecture. Authentication, checkout, payment/refun
 |---|---|
 | Multi-item checkout | Implemented, with transactional inventory, price snapshots, idempotency and Outbox recording |
 | Registration and login | Implemented using ASP.NET Core Identity API endpoints |
-| Order ownership | Both order endpoints require authentication; customers can retrieve only their own orders |
+| Order ownership | Order endpoints require authentication; customers can retrieve only their own orders |
 | Schema migrations | Initial, payments, refunds, processed-message, and Outbox retry migrations generated; startup applies pending migrations |
 | Payments and refunds | Creation, success, failure, timeout, replay, partial-refund limits, and transaction checks implemented |
 | Cancellation and expiration | Manual cancellation and a hosted expiration worker restore stock exactly once and respect unresolved payments |
 | Outbox delivery | Dispatcher, logging publisher, hosted worker, retry/backoff, dead-lettering, and consumer deduplication implemented |
+| HTTP boundary | DTO responses, example `.http` requests, and unauthenticated database health endpoint added |
+| Operations | Docker configuration and CI workflow added; container runtime and remote CI execution not verified here; CD not configured |
 
 ## Decisions and reasons
 
@@ -210,7 +224,7 @@ dotnet run -- --verify
 
 From the workspace root, use `dotnet run --project Ecommerce -- --verify` instead. No running API, Postman or login token is required.
 
-Latest verification on 2026-10-01: `dotnet run --project Ecommerce --no-restore -- --verify` passed all 362 assertions.
+Latest verification on 2026-10-02: `dotnet run --project Ecommerce.csproj --no-build -- --verify` passed all 362 assertions.
 
 This is a custom runner, not a `dotnet test` project. It contains **362 assertions** across checkout, payment, refund, expiration, worker, Outbox, and consumer scenarios. Each scenario creates a uniquely named temporary SQLite database and deletes it in a finally block. The normal API database is untouched.
 
@@ -222,7 +236,7 @@ These tests call services directly. They do not cover HTTP authentication/token 
 
 ## Implemented: pending payment creation
 
-`models/Payment.cs` contains the payment ID, order ID, amount in cents, currency, status, idempotency key and creation time. The unique `(OrderId, IdempotencyKey)` index prevents duplicate records for the same payment attempt; it does not by itself prevent multiple charges using different keys.
+`Models/Payment.cs` contains the payment ID, order ID, amount in cents, currency, status, idempotency key and creation time. The unique `(OrderId, IdempotencyKey)` index prevents duplicate records for the same payment attempt; it does not by itself prevent multiple charges using different keys.
 
 `PaymentService.Create(customerId, orderId, idempotencyKey)` uses an immediate SQLite transaction. It finds the order by ID AND owner before replay lookup, returns the existing payment for the same key, requires PendingPayment for a new attempt, calculates the amount from saved order items, and rejects another Pending or Unknown payment for the order. It saves the payment with the order's currency, leaving the order PendingPayment and emitting no OrderPaid event. No money is charged.
 
@@ -253,7 +267,7 @@ GET the order afterward using its owner's token: it must still be PendingPayment
 
 All handlers are local service methods, not public payment-outcome endpoints. Real provider calls must stay outside transactions; callbacks must verify provider authenticity. No schema migration is needed for Unknown because Status is stored as a string.
 
-Verification uses fresh database contexts and checks persisted states, event counts, replay, blocked attempts, terminal-state protection, and retries after confirmed failure. Real provider lookup/polling, cancellation, refunds, and failure-injection testing of payment transactions remain future work.
+Verification uses fresh database contexts and checks persisted states, event counts, replay, blocked attempts, terminal-state protection, and retries after confirmed failure. Real provider lookup/polling and callbacks remain future work; cancellation and refunds are covered separately below.
 
 ## Implemented: expiration, refunds, and reliable messaging
 
@@ -265,21 +279,20 @@ The Outbox dispatcher and worker publish unpublished events, record retry metada
 
 ## Learning roadmap
 
-We are beginning Stage 6. Earlier stages are a foundation, not a claim that every optional feature is finished (carts, for example, are deferred).
+The core local backend prototype is complete. Later stages are optional extensions, not requirements for finishing this learning project.
 
 1. Request flow, layering and basic checkout — covered.
 2. Multi-item data model, transactions and concurrency — implemented and verified; explicit reservations/carts deferred.
 3. Identity and customer ownership — implemented; no administrator bypass or automated HTTP suite yet.
 4. Payment lifecycle — Creation, success, failure, timeout, cancellation, expiration, and refunds implemented locally.
 5. Reliable messaging — Outbox dispatcher, retries/backoff, dead-lettering, and consumer idempotency implemented locally; external broker deferred.
-6. Performance — measure queries, indexes, pagination and then caching.
-7. Product images — object storage, background processing and CDN.
-8. Operations — observability, tests, Docker, CI/CD and deployment.
-9. Scaling — multiple instances, replicas and justified architectural changes.
+6. Performance — paginated order listing implemented; query measurement, index review, and caching (including Redis) were skipped.
+7. Product images — object storage, background processing, and CDN deferred.
+8. Operations — worker error logs, health endpoint, verification suite, Docker files, and CI workflow added; Docker runtime check and deployment deferred.
+9. Scaling — multiple instances and replicas deferred until there is a measured need. The current SQLite database and in-process workers are designed for one instance.
 
-## Next implementation steps
+## Optional future work
 
-1. Measure query performance and review indexes and pagination.
-2. Add observability: structured events, metrics, traces, and worker health.
-3. Add real provider/broker integrations only when their contracts are defined.
-4. Deployment, CI/CD, Docker, and measured caching/scaling work.
+If continuing beyond the local prototype, first run the manual HTTP flow and the Docker persistence check, then confirm the GitHub Actions workflow runs after a push. Further work could measure query performance, add metrics and traces, integrate a real payment provider or broker, add product images, and deploy the API. These are separate goals rather than unfinished parts of the current prototype.
+
+For multiple API instances, first move orders and inventory to a shared server database such as PostgreSQL, adapt and retest the SQLite-specific checkout transaction, and coordinate the expiration and Outbox workers so instances do not process the same work concurrently. A load balancer can then distribute requests. Redis is optional and should follow a measured caching need; it cannot replace the durable orders database.
