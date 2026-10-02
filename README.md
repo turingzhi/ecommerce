@@ -147,6 +147,8 @@ For a future model change, use the installed `dotnet-ef` 10.0.11 tool, generate 
 
 ## Postman: register, log in and create an order
 
+Ready-to-edit requests are also in `Http/`: `health.http`, `auth.http`, `orders.http`, and `payments.http`. Run the API first, send the login request, then paste its `accessToken` into the protected request files. After creating an order, paste its `id` into `orders.http` and `payments.http`. Change an `Idempotency-Key` when you intend to create a new order or payment attempt. These files contain example credentials for local learning only; do not replace them with real secrets.
+
 Use `http://127.0.0.1:5088` as the base URL. For POST bodies choose **Body → raw → JSON**.
 
 1. Register Alice with **POST `/auth/register`**, Authorization **No Auth**:
@@ -171,6 +173,8 @@ Use `http://127.0.0.1:5088` as the base URL. For POST bodies choose **Body → r
    ```
 
 4. Copy the returned order's top-level `id`. Retrieve it using **GET `/orders/{id}`** with Alice's token. Expect `200` with its order items.
+
+The HTTP request and response types are in `Dtos/`. Order responses include the order ID, status, currency, creation time, and items; payment responses include the payment ID, order ID, amount, currency, status, and creation time. They do not return database-only fields such as `CustomerId` or `IdempotencyKey`. The order list returns a smaller summary for each order.
 
 The equivalent checkout command is below; replace `YOUR_ACCESS_TOKEN` with the login response's token:
 

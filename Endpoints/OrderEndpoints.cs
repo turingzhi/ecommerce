@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Ecommerce.Dtos;
 
 namespace Ecommerce;
 
@@ -37,8 +38,8 @@ public static class OrderEndpoints
             if (result.Error is not null)
                 return Results.Conflict(new { error = result.Error });
             return result.Replayed
-                ? Results.Ok(result.Order)
-                : Results.Json(result.Order, statusCode: StatusCodes.Status201Created);
+                ? Results.Ok(OrderResponse.From(result.Order!))
+                : Results.Json(OrderResponse.From(result.Order!), statusCode: StatusCodes.Status201Created);
         }).RequireAuthorization();
 
         app.MapGet("/orders", async (
@@ -63,21 +64,12 @@ public static class OrderEndpoints
                 .ThenByDescending(o => o.Id)
                 .Skip(skip)
                 .Take(currentPageSize)
-                .Select(o => new
-                {
-                    o.Id,
-                    o.Status,
-                    o.CreatedAt,
-                    o.Currency
-                })
+                .Select(o => new OrderSummaryResponse(
+                    o.Id, o.Status, o.CreatedAt, o.Currency))
                 .ToListAsync();
 
-            return Results.Ok(new
-            {
-                Page = currentPage,
-                PageSize = currentPageSize,
-                Orders = orders
-            });
+            return Results.Ok(new OrderListResponse(
+                currentPage, currentPageSize, orders));
         })
         .RequireAuthorization();
 
@@ -95,7 +87,9 @@ public static class OrderEndpoints
                 .Include(o => o.OrderItems)
                 .SingleOrDefaultAsync(o => o.Id == id && o.CustomerId == customerId);
 
-            return order is null ? Results.NotFound() : Results.Ok(order);
+            return order is null
+                ? Results.NotFound()
+                : Results.Ok(OrderResponse.From(order));
         }).RequireAuthorization();
 
         return app;

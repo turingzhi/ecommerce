@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Ecommerce.Dtos;
 
 namespace Ecommerce;
 
@@ -24,8 +25,8 @@ public static class PaymentEndpoints
             if (result.Error is not null)
                 return Results.Conflict(new { error = result.Error });
             return result.Replayed
-                ? Results.Ok(result.Payment)
-                : Results.Json(result.Payment, statusCode: StatusCodes.Status201Created);
+                ? Results.Ok(PaymentResponse.From(result.Payment!))
+                : Results.Json(PaymentResponse.From(result.Payment!), statusCode: StatusCodes.Status201Created);
         }).RequireAuthorization();
 
         return app;

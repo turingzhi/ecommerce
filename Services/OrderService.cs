@@ -4,11 +4,10 @@ using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using Ecommerce.Dtos;
 
 namespace Ecommerce;
 
-public record CreateOrderItem(int ProductId, int Quantity);
-public record CreateOrder(List<CreateOrderItem> Items);
 public record OrderResult(Order? Order, bool Replayed = false, string? Error = null);
 
 public class OrderService(ShopDb db)
@@ -260,4 +259,3 @@ public class OrderService(ShopDb db)
         return new(order);
     }
 }
-

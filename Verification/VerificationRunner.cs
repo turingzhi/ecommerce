@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 
+using Ecommerce.Dtos;
+
 namespace Ecommerce;
 
 public static partial class Verification

@@ -1,0 +1,25 @@
+@baseUrl = http://127.0.0.1:5088
+@accessToken = PASTE_ACCESS_TOKEN_HERE
+@orderId = 00000000-0000-0000-0000-000000000000
+
+### Create an order; use a new key for a different order
+POST {{baseUrl}}/orders
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: checkout-001
+Content-Type: application/json
+
+{
+  "items": [
+    { "productId": 1, "quantity": 2 },
+    { "productId": 2, "quantity": 1 }
+  ]
+}
+
+### List your orders
+GET {{baseUrl}}/orders?page=1&pageSize=10
+Authorization: Bearer {{accessToken}}
+
+### Paste the created order's id into orderId above
+GET {{baseUrl}}/orders/{{orderId}}
+Authorization: Bearer {{accessToken}}
+
