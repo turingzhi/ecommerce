@@ -1,0 +1,10 @@
+services:
+  ecommerce:
+    build: .
+    ports:
+      - "5088:8080"
+    volumes:
+      - ecommerce-data:/data
+
+volumes:
+  ecommerce-data:
