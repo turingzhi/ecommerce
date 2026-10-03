@@ -1,11 +1,11 @@
 @baseUrl = http://127.0.0.1:5088
 @accessToken = PASTE_ACCESS_TOKEN_HERE
-@orderId = 00000000-0000-0000-0000-000000000000
+@orderId = PASTE_ORDER_ID_HERE
 
 ### Create an order; use a new key for a different order
 POST {{baseUrl}}/orders
 Authorization: Bearer {{accessToken}}
-Idempotency-Key: checkout-001
+Idempotency-Key: sqlserver-checkout-001
 Content-Type: application/json
 
 {

@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
@@ -16,25 +15,19 @@ public class PaymentService(ShopDb db)
         Guid orderId,
         string idempotencyKey)
     {
-        await db.Database.OpenConnectionAsync();
-
-        // SQLite's immediate transaction serializes writers so two new attempts
-        // cannot both pass the pending-payment check and insert a payment.
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
+            await db.Database.BeginTransactionAsync();
 
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
+        // Serialize payment creation per order on SQL Server. Keep the lock until
+        // the pending-payment check and insert commit in this transaction.
+        var orders = db.Database.IsSqlServer()
+            ? db.Orders.FromSqlInterpolated(
+                $"SELECT * FROM dbo.Orders WITH (UPDLOCK, HOLDLOCK) WHERE Id = {orderId} AND CustomerId = {customerId}")
+            : db.Orders.Where(o => o.Id == orderId && o.CustomerId == customerId);
 
-        // Load the order and its price snapshots, enforcing ownership in the query.
-
-        var order = await db.Orders
+        var order = await orders
             .Include(o => o.OrderItems)
-            .SingleOrDefaultAsync(
-                o => o.Id == orderId &&
-                o.CustomerId == customerId
-            );
+            .SingleOrDefaultAsync();
 
         if (order is null)
         {
@@ -76,7 +69,6 @@ public class PaymentService(ShopDb db)
             return new(null, false, "An unresolved payment already exists for this order");
         }
         // Create a Pending attempt; the Payment model supplies the initial status.
-        // TODO: Copy order.Currency into this payment as well.
         var payment = new Payment
         {
             OrderId = orderId,
@@ -99,25 +91,14 @@ public class PaymentService(ShopDb db)
         Guid paymentId
     )
     {
-        await db.Database.OpenConnectionAsync();
-
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
+            await db.Database.BeginTransactionAsync();
 
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
-
-        var payment = await db.Payments.SingleOrDefaultAsync(
-            p => p.Id == paymentId
-        );
+        var (payment, order) = await LoadPaymentAndOrderForOutcome(paymentId);
         if (payment is null)
         {
             return new(null, false, "Payment not found");
         }
-
-        var order = await db.Orders.SingleOrDefaultAsync(
-            o => o.Id == payment.OrderId);
 
         if (order is null)
         {
@@ -164,25 +145,14 @@ public class PaymentService(ShopDb db)
         Guid paymentId
     )
     {
-        await db.Database.OpenConnectionAsync();
-
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
+            await db.Database.BeginTransactionAsync();
 
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
-
-        var payment = await db.Payments.SingleOrDefaultAsync(
-            p => p.Id == paymentId
-        );
+        var (payment, order) = await LoadPaymentAndOrderForOutcome(paymentId);
         if (payment is null)
         {
             return new(null, false, "Payment not found");
         }
-
-        var order = await db.Orders.SingleOrDefaultAsync(
-            o => o.Id == payment.OrderId);
 
         if (order is null)
         {
@@ -230,20 +200,14 @@ public class PaymentService(ShopDb db)
 
     public async Task<PaymentResult> SimulateTimeout(Guid paymentId)
     {
-        await db.Database.OpenConnectionAsync();
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
+            await db.Database.BeginTransactionAsync();
 
-        var payment = await db.Payments.SingleOrDefaultAsync(p => p.Id == paymentId);
+        var (payment, order) = await LoadPaymentAndOrderForOutcome(paymentId);
         if (payment is null)
         {
             return new(null, false, "Payment not found");
         }
-
-        var order = await db.Orders.SingleOrDefaultAsync(o => o.Id == payment.OrderId);
         if (order is null)
         {
             return new(null, false, "Order not found");
@@ -267,9 +231,36 @@ public class PaymentService(ShopDb db)
         await transaction.CommitAsync();
         return new(payment);
     }
-    // public async Task<PaymentResult> SimulateLateSuccess(Guid paymentId)
-    // {
-        
-    // }
 
+    private async Task<(Payment? Payment, Order? Order)> LoadPaymentAndOrderForOutcome(
+        Guid paymentId)
+    {
+        if (db.Database.IsSqlServer())
+        {
+            // Read the stable foreign key first, then lock the order before
+            // checking payment state. All order/payment transitions use this lock.
+            var orderId = await db.Payments.AsNoTracking()
+                .Where(p => p.Id == paymentId)
+                .Select(p => (Guid?)p.OrderId)
+                .SingleOrDefaultAsync();
+            if (orderId is null)
+            {
+                return (null, null);
+            }
+
+            var order = await db.Orders.FromSqlInterpolated(
+                    $"SELECT * FROM dbo.Orders WITH (UPDLOCK, HOLDLOCK) WHERE Id = {orderId.Value}")
+                .SingleOrDefaultAsync();
+            var payment = await db.Payments
+                .SingleOrDefaultAsync(p => p.Id == paymentId);
+            return (payment, order);
+        }
+
+        var existingPayment = await db.Payments
+            .SingleOrDefaultAsync(p => p.Id == paymentId);
+        var existingOrder = existingPayment is null
+            ? null
+            : await db.Orders.SingleOrDefaultAsync(o => o.Id == existingPayment.OrderId);
+        return (existingPayment, existingOrder);
+    }
 }

@@ -1,6 +1,6 @@
 @baseUrl = http://127.0.0.1:5088
 @accessToken = PASTE_ACCESS_TOKEN_HERE
-@orderId = 00000000-0000-0000-0000-000000000000
+@orderId = PASTE_ORDER_ID_HERE
 
 ### Create a payment attempt; use a new key only for a new attempt
 POST {{baseUrl}}/orders/{{orderId}}/payments

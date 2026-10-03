@@ -39,7 +39,8 @@ public class OutboxDispatcher(
                 message.AttemptCount++;
                 message.LastAttemptAt = DateTime.UtcNow;
                 message.LastError = ex.Message;
-                message.DeadLettered = message.AttemptCount >= 5;
+                message.DeadLettered = ex is not BrokerDeliveryUnavailableException &&
+                    message.AttemptCount >= 5;
                 var delaySeconds = Math.Min(300, Math.Pow(2, message.AttemptCount));
                 message.NextAttemptAt = message.DeadLettered
                     ? null

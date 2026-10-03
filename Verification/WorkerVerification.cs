@@ -145,7 +145,7 @@ public static partial class Verification
             var events = await db.Outbox.ToListAsync();
             Check(events.Count == 101 && events.All(e => e.Type == "OrderCancelled") &&
                   events.Select(e => e.OrderId).Distinct().Count() == 101 &&
-                  events.All(e => eligible.Contains(e.OrderId)),
+                  events.All(e => e.OrderId.HasValue && eligible.Contains(e.OrderId.Value)),
                 "Repeated batches produce exactly one cancellation event per eligible order");
             Check((await db.Products.SingleAsync()).Available == 101,
                 "Repeated worker batches never restore stock twice");

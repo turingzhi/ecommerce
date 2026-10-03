@@ -1,4 +1,3 @@
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
@@ -30,25 +29,20 @@ public class RefundService(ShopDb db)
         {
             return new(null, false, "Idempotency key must not exceed 100 characters");
         }
-        await db.Database.OpenConnectionAsync();
-
-        // Use an immediate SQLite transaction so concurrent refund creation
-        // attempts cannot both pass validation and create conflicting refunds.
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
-
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
+            await db.Database.BeginTransactionAsync();
 
 
         // 1. Load the payment that this refund is intended to reverse.
         // The payment provides the original charge amount and currency.
-        var payment = await db.Payments
+        var payments = db.Database.IsSqlServer()
+            ? db.Payments.FromSqlInterpolated(
+                $"SELECT * FROM dbo.Payments WITH (UPDLOCK, HOLDLOCK) WHERE Id = {paymentId}")
+            : db.Payments.Where(p => p.Id == paymentId);
+
+        var payment = await payments
             .AsNoTracking()
-            .SingleOrDefaultAsync(
-                p => p.Id == paymentId
-            );
+            .SingleOrDefaultAsync();
 
 
         // 2. Reject the request if the payment does not exist.
@@ -170,23 +164,13 @@ public class RefundService(ShopDb db)
         //    No external payment-provider call belongs inside this transaction.
         return new(refund);
 
-
-        // 10. Return the newly created refund.
-        // throw new NotImplementedException();
     }
     public async Task<RefundResult> SimulateSuccess(Guid refundId)
     {
-        await db.Database.OpenConnectionAsync();
-
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
+            await db.Database.BeginTransactionAsync();
 
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
-
-        var refund = await db.Refunds
-            .SingleOrDefaultAsync(r => r.Id == refundId);
+        var (refund, payment) = await LoadRefundAndPaymentForOutcome(refundId);
 
         if (refund is null)
         {
@@ -202,12 +186,6 @@ public class RefundService(ShopDb db)
         {
             return new(null, false, "Refund cannot succeed");
         }
-
-        // Next: load the payment, update the refund, and record the event.
-        var payment = await db.Payments
-            .SingleOrDefaultAsync(
-                p => p.Id == refund.PaymentId
-            );
 
         if (payment is null)
         {
@@ -237,17 +215,10 @@ public class RefundService(ShopDb db)
     }
     public async Task<RefundResult> SimulateFailure(Guid refundId)
     {
-        await db.Database.OpenConnectionAsync();
-
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
+            await db.Database.BeginTransactionAsync();
 
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
-
-        var refund = await db.Refunds
-            .SingleOrDefaultAsync(r => r.Id == refundId);
+        var (refund, payment) = await LoadRefundAndPaymentForOutcome(refundId);
 
         if (refund is null)
         {
@@ -263,12 +234,6 @@ public class RefundService(ShopDb db)
         {
             return new(null, false, "Refund cannot be marked failed");
         }
-
-        // Next: load the payment, update the refund, and record the event.
-        var payment = await db.Payments
-            .SingleOrDefaultAsync(
-                p => p.Id == refund.PaymentId
-            );
 
         if (payment is null)
         {
@@ -298,17 +263,10 @@ public class RefundService(ShopDb db)
     }
     public async Task<RefundResult> SimulateTimeout(Guid refundId)
     {
-        await db.Database.OpenConnectionAsync();
-
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
+            await db.Database.BeginTransactionAsync();
 
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
-
-        var refund = await db.Refunds
-            .SingleOrDefaultAsync(r => r.Id == refundId);
+        var (refund, payment) = await LoadRefundAndPaymentForOutcome(refundId);
 
         if (refund is null)
         {
@@ -324,12 +282,6 @@ public class RefundService(ShopDb db)
         {
             return new(null, false, "Refund cannot be marked unknown");
         }
-
-        // Next: load the payment, update the refund, and record the event.
-        var payment = await db.Payments
-            .SingleOrDefaultAsync(
-                p => p.Id == refund.PaymentId
-            );
 
         if (payment is null)
         {
@@ -356,5 +308,36 @@ public class RefundService(ShopDb db)
 
         return new(refund);
 
+    }
+
+    private async Task<(Refund? Refund, Payment? Payment)> LoadRefundAndPaymentForOutcome(
+        Guid refundId)
+    {
+        if (db.Database.IsSqlServer())
+        {
+            // Refund creation and all refund outcomes lock the same payment row.
+            var paymentId = await db.Refunds.AsNoTracking()
+                .Where(r => r.Id == refundId)
+                .Select(r => (Guid?)r.PaymentId)
+                .SingleOrDefaultAsync();
+            if (paymentId is null)
+            {
+                return (null, null);
+            }
+
+            var payment = await db.Payments.FromSqlInterpolated(
+                    $"SELECT * FROM dbo.Payments WITH (UPDLOCK, HOLDLOCK) WHERE Id = {paymentId.Value}")
+                .SingleOrDefaultAsync();
+            var refund = await db.Refunds
+                .SingleOrDefaultAsync(r => r.Id == refundId);
+            return (refund, payment);
+        }
+
+        var existingRefund = await db.Refunds
+            .SingleOrDefaultAsync(r => r.Id == refundId);
+        var existingPayment = existingRefund is null
+            ? null
+            : await db.Payments.SingleOrDefaultAsync(p => p.Id == existingRefund.PaymentId);
+        return (existingRefund, existingPayment);
     }
 }

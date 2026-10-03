@@ -3,7 +3,7 @@ namespace Ecommerce;
 public class OutboxMessage
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    public Guid OrderId { get; set; }
+    public Guid? OrderId { get; set; }
     public string Type { get; set; } = "OrderCreated";
     public string Payload { get; set; } = "";
     public DateTime? PublishedAt { get; set; }

@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
@@ -14,17 +13,19 @@ public class OrderService(ShopDb db)
 {
     public async Task<OrderResult> Create(string customerId, string key, CreateOrder request)
     {
-        // SQLite has one writer. An immediate transaction acquires the write lock
-        // before the idempotency lookup. PostgreSQL would use a different strategy.
-        await db.Database.OpenConnectionAsync();
-        await using var transaction = ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
-        await using var enlisted = await db.Database.UseTransactionAsync(transaction);
+        await using var transaction =
+            await db.Database.BeginTransactionAsync();
 
-        var existing = await db.Orders.AsNoTracking()
+        // A missing key needs a range lock too: otherwise two requests can both
+        // miss it, and the loser reports a stock conflict instead of replaying.
+        var ordersForKey = db.Database.IsSqlServer()
+            ? db.Orders.FromSqlInterpolated(
+                $"SELECT * FROM dbo.Orders WITH (UPDLOCK, HOLDLOCK, INDEX(IX_Orders_CustomerId_IdempotencyKey)) WHERE CustomerId = {customerId} AND IdempotencyKey = {key}")
+            : db.Orders.Where(o => o.CustomerId == customerId && o.IdempotencyKey == key);
+
+        var existing = await ordersForKey.AsNoTracking()
             .Include(order => order.OrderItems)
-            .SingleOrDefaultAsync(
-            o => o.CustomerId == customerId && o.IdempotencyKey == key);
+            .SingleOrDefaultAsync();
         if (existing is not null)
         {
             if (existing.OrderItems.Count() != request.Items.Count())
@@ -105,17 +106,17 @@ public class OrderService(ShopDb db)
         string customerId,
         Guid orderId)
     {
-        await db.Database.OpenConnectionAsync();
-        await using var transaction = ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
-        await using var enlisted = await db.Database.UseTransactionAsync(transaction);
+        await using var transaction =
+            await db.Database.BeginTransactionAsync();
 
-        var order = await db.Orders
+        var orders = db.Database.IsSqlServer()
+            ? db.Orders.FromSqlInterpolated(
+                $"SELECT * FROM dbo.Orders WITH (UPDLOCK, HOLDLOCK) WHERE Id = {orderId} AND CustomerId = {customerId}")
+            : db.Orders.Where(o => o.CustomerId == customerId && o.Id == orderId);
+
+        var order = await orders
             .Include(o => o.OrderItems)
-            .SingleOrDefaultAsync(
-                o => o.CustomerId == customerId &&
-                o.Id == orderId
-            );
+            .SingleOrDefaultAsync();
 
         if (order is null)
         {
@@ -176,18 +177,17 @@ public class OrderService(ShopDb db)
     Guid orderId,
     DateTime nowUtc)
     {
-        await db.Database.OpenConnectionAsync();
-
         await using var transaction =
-            ((SqliteConnection)db.Database.GetDbConnection())
-            .BeginTransaction(deferred: false);
+            await db.Database.BeginTransactionAsync();
 
-        await using var enlisted =
-            await db.Database.UseTransactionAsync(transaction);
+        var orders = db.Database.IsSqlServer()
+            ? db.Orders.FromSqlInterpolated(
+                $"SELECT * FROM dbo.Orders WITH (UPDLOCK, HOLDLOCK) WHERE Id = {orderId}")
+            : db.Orders.Where(o => o.Id == orderId);
 
-        var order = await db.Orders
+        var order = await orders
             .Include(o => o.OrderItems)
-            .SingleOrDefaultAsync(o => o.Id == orderId);
+            .SingleOrDefaultAsync();
 
         if (order is null)
         {

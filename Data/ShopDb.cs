@@ -24,6 +24,12 @@ public class ShopDb(DbContextOptions<ShopDb> options) : IdentityDbContext<Identi
                 o.IdempotencyKey
             })
             .IsUnique();
+
+        model.Entity<Order>()
+            .HasIndex(o => new { o.CustomerId, o.CreatedAt, o.Id })
+            .HasDatabaseName("IX_Orders_CustomerId_CreatedAt_Id")
+            .IsDescending(false, true, true)
+            .IncludeProperties(o => new { o.Status, o.Currency });
         
         model.Entity<Payment>()
         .HasIndex(payment => new
@@ -70,5 +76,8 @@ public class ShopDb(DbContextOptions<ShopDb> options) : IdentityDbContext<Identi
             .HasForeignKey(m => m.OrderId);
         model.Entity<Product>()
             .ToTable(t => t.HasCheckConstraint("CK_Stock", "Available >= 0"));
+        model.Entity<Product>()
+            .Property(p => p.Version)
+            .IsConcurrencyToken();
     }
 }
