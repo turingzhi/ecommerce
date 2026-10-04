@@ -1,6 +1,6 @@
 # Learning objectives and continuation notes
 
-This document records the study plan and design ideas for the E-commerce backend. See [README.md](README.md) for implemented behavior, setup, API examples, and verification.
+This document records the study plan and design ideas for the E-commerce backend. See [README.md](README.md) for implemented behavior, setup, API examples, and verification. For a language guide, see [C# fundamentals, DI, and encapsulation](docs/csharp-fundamentals.md).
 
 ## Current learning task
 
