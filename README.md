@@ -73,6 +73,8 @@ The API applies pending SQL Server migrations at startup and creates two sample 
 
 `docker compose down` stops the stack while preserving its named data volumes. `docker compose down -v` also deletes those volumes and their data. The local Elasticsearch service has authentication disabled; the Compose configuration is for local use.
 
+For configuration, logs, and recovery checks, see [local operations](docs/operations.md).
+
 The API can also run on the host with the .NET 10 SDK. Configure `ConnectionStrings:ShopDatabase` for SQL Server and start the required infrastructure, then run `dotnet run -- --urls http://127.0.0.1:5088`. Outside Compose, Elasticsearch defaults to `http://localhost:9200` and RabbitMQ to `localhost:5672` with `guest` credentials unless configured otherwise.
 
 ## Catalog and search
@@ -88,13 +90,13 @@ The update command changes searchable details, not stock. Replace `3` with the p
 
 ## Verification
 
-The repository has custom verification runners rather than a `dotnet test` project. Run the SQLite service checks with:
+The repository has custom verification runners rather than a `dotnet test` project. With the local Compose stack running and `ECOMMERCE_SQLSERVER` set as described in the [verification guide](docs/verification.md), run the SQL Server service checks with:
 
 ```sh
 dotnet run -- --verify
 ```
 
-SQL Server, RabbitMQ, and product-sync runners are also available, and CI runs them against a Compose stack. See [verification commands and scope](docs/verification.md). The [local demonstration](docs/demo.md) covers checkout and Elasticsearch outage recovery.
+Focused SQL Server concurrency, RabbitMQ, and product-sync runners are also available. CI runs them against a Compose stack and checks the authenticated HTTP checkout flow with `python3 scripts/verify_http.py`. See [verification commands and scope](docs/verification.md). The [local demonstration](docs/demo.md) covers checkout and Elasticsearch outage recovery.
 
 ## Current limitations
 
@@ -105,3 +107,7 @@ SQL Server, RabbitMQ, and product-sync runners are also available, and CI runs t
 - Multi-instance worker coordination and production deployment are not implemented.
 
 The [order-list index measurement](docs/sqlserver-order-list-performance.md) records one local SQL Server performance comparison.
+
+## Documentation
+
+See the [documentation index](docs/README.md) for architecture, API usage, workflows, verification, and reference material.

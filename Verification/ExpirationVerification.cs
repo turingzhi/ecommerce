@@ -8,16 +8,16 @@ public static partial class Verification
 {
     private static async Task VerifyExpirationPaymentSafety()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-expiration-payments-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_expiration_payments_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using (var db = new ShopDb(options))
             {
                 await db.Database.EnsureCreatedAsync();
                 db.Products.Add(new Product { Id = 1, PriceCents = 5000, Available = 5 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             Guid orderId;
@@ -84,7 +84,7 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 }

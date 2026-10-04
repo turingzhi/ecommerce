@@ -34,16 +34,16 @@ public static partial class Verification
 
     private static async Task VerifyBasicCheckout()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using (var db = new ShopDb(options))
             {
                 await db.Database.EnsureCreatedAsync();
                 db.Products.Add(new Product { Id = 1, PriceCents = 5000, Available = 1 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
             async Task<OrderResult> Create(string key, int quantity = 1)
             {
@@ -69,8 +69,8 @@ public static partial class Verification
                 var order = await db.Orders.Include(o => o.OrderItems).SingleAsync();
                 Check(order.OrderItems.Single().UnitPriceCents == 5000, "Historical price unchanged");
                 await db.Database.ExecuteSqlRawAsync("""
-                    CREATE TRIGGER FailOutbox BEFORE INSERT ON Outbox
-                    BEGIN SELECT RAISE(ABORT, 'simulated outbox storage failure'); END;
+                    ALTER TABLE [dbo].[Outbox] WITH NOCHECK
+                    ADD CONSTRAINT [CK_VerifyFailOutbox] CHECK (1 = 0)
                     """);
             }
             var failed = false;
@@ -81,7 +81,8 @@ public static partial class Verification
             {
                 Check((await db.Products.SingleAsync()).Available == 5, "Failure rolls back inventory");
                 Check(await db.Orders.CountAsync() == 1, "Failure rolls back order");
-                await db.Database.ExecuteSqlRawAsync("DROP TRIGGER FailOutbox;");
+                await db.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE [dbo].[Outbox] DROP CONSTRAINT [CK_VerifyFailOutbox]");
             }
             var duplicates = await Task.WhenAll(
                 Task.Run(() => Create("same-key")), Task.Run(() => Create("same-key")));
@@ -90,16 +91,16 @@ public static partial class Verification
                   duplicates.Count(r => r.Replayed) == 1,
                 "Concurrent same-key requests create one order");
         }
-        finally { File.Delete(path); }
+        finally { await DeleteVerificationDatabase(options); }
     }
 
 
     private static async Task VerifyMultiItemRollback()
     {
         // Separate database so this scenario cannot change the existing tests.
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-multi-item-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_multi_item_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
 
         try
         {
@@ -109,7 +110,7 @@ public static partial class Verification
                 await db.Database.EnsureCreatedAsync();
                 db.Products.Add(new Product { Id = 101, PriceCents = 5000, Available = 5 });
                 db.Products.Add(new Product { Id = 102, PriceCents = 2000, Available = 0 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
 
             }
 
@@ -164,15 +165,15 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
     private static async Task VerifyMultiItemSuccess()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-success-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_success_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
 
         try
         {
@@ -186,7 +187,7 @@ public static partial class Verification
                 // Add product B: Id 102, PriceCents 2000, Available 3.
                 db.Products.Add(new Product { Id = 102, PriceCents = 2000, Available = 3 });
                 // Save the products.
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             // ACT
@@ -245,7 +246,7 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
@@ -255,9 +256,9 @@ public static partial class Verification
 
     private static async Task VerifyPaymentCreation()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-payments-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_payments_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         var orderId = Guid.NewGuid();
 
         try
@@ -286,7 +287,7 @@ public static partial class Verification
                     Currency = "USD"
                 });
                 // Persist setup before the service runs in a different context.
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             // Each call uses a fresh context, like separate HTTP requests.
@@ -386,15 +387,15 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
     private static async Task VerifyPaymentFailure()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-payment-failure-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_payment_failure_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         var orderId = Guid.NewGuid();
 
         try
@@ -421,7 +422,7 @@ public static partial class Verification
                     OrderItems = [orderItem],
                     Currency = "USD"
                 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             Guid paymentId;
@@ -498,15 +499,15 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
     private static async Task VerifyPaymentTimeout(bool resolvesSuccessfully)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-timeout-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_timeout_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         var orderId = Guid.NewGuid();
         try
         {
@@ -526,7 +527,7 @@ public static partial class Verification
                         ProductId = 101, Quantity = 2, UnitPriceCents = 5000, OrderId = orderId
                     }]
                 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             // Separate contexts model separate requests and verify committed state.
@@ -594,7 +595,7 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
@@ -604,16 +605,16 @@ public static partial class Verification
 
     private static async Task VerifyOrderCancellation()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-cancellation-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_cancellation_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using (var db = new ShopDb(options))
             {
                 await db.Database.EnsureCreatedAsync();
                 db.Products.Add(new Product { Id = 1, PriceCents = 5000, Available = 5 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             Guid orderId;
@@ -691,22 +692,22 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
     private static async Task VerifyCancellationWithPayment()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-cancel-payment-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_cancel_payment_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using (var db = new ShopDb(options))
             {
                 await db.Database.EnsureCreatedAsync();
                 db.Products.Add(new Product { Id = 1, PriceCents = 5000, Available = 5 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             Guid orderId;
@@ -822,22 +823,22 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
     private static async Task VerifyOrderExpiration()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-expiration-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_expiration_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using (var db = new ShopDb(options))
             {
                 await db.Database.EnsureCreatedAsync();
                 db.Products.Add(new Product { Id = 1, PriceCents = 5000, Available = 5 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             Guid orderId;
@@ -923,7 +924,7 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
@@ -933,16 +934,16 @@ public static partial class Verification
 
     private static async Task VerifyRefundCreation()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-refunds-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_refunds_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using (var db = new ShopDb(options))
             {
                 await db.Database.EnsureCreatedAsync();
                 db.Products.Add(new Product { Id = 1, PriceCents = 5000, Available = 5 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
 
             Guid orderId;
@@ -1253,7 +1254,7 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 

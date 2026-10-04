@@ -1,5 +1,7 @@
 # Product synchronization and search
 
+[Documentation index](README.md) · [Project overview](../README.md)
+
 SQL Server is the catalog's source of truth. Elasticsearch holds a searchable copy and can briefly lag behind a write. The HTTP [search endpoint](api.md#product-search) queries Elasticsearch; checkout reads current price and stock from SQL Server.
 
 ## Catalog write path

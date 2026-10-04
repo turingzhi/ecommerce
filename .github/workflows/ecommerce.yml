@@ -16,8 +16,6 @@ jobs:
         run: dotnet restore Ecommerce.csproj
       - name: Build
         run: dotnet build Ecommerce.csproj --no-restore
-      - name: Verify
-        run: dotnet run --project Ecommerce.csproj --no-build -- --verify
       - name: Generate SQL Server password for this run
         run: |
           password="Aa!$(openssl rand -hex 16)"
@@ -26,6 +24,8 @@ jobs:
           printf 'ECOMMERCE_SQLSERVER=Server=127.0.0.1,14333;Database=Ecommerce;User Id=sa;Password=%s;Encrypt=True;TrustServerCertificate=True\n' "$password" >> "$GITHUB_ENV"
       - name: Start full stack
         run: docker compose up -d --build --wait
+      - name: Verify service workflows
+        run: dotnet run --project Ecommerce.csproj --no-build -- --verify
       - name: Check API readiness
         run: curl --fail --show-error --retry 20 --retry-delay 3 --retry-connrefused http://127.0.0.1:5088/health
       - name: Check automatic product search
@@ -39,6 +39,8 @@ jobs:
           done
           echo 'Sample products did not reach Elasticsearch' >&2
           exit 1
+      - name: Verify authenticated HTTP workflow
+        run: python3 scripts/verify_http.py
       - name: Verify SQL Server workflows
         run: dotnet run --project Ecommerce.csproj --no-build -- --verify-sqlserver
       - name: Pause API consumer for isolated broker checks

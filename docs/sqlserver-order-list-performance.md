@@ -1,5 +1,7 @@
 # SQL Server order-list query: measured index change
 
+[Documentation index](README.md) · [Project overview](../README.md)
+
 Measured on 3 October 2026 against the local `EcommerceVerification` SQL Server database. The query matches `GET /orders?page=1&pageSize=20`: filter to one customer, order by newest creation time and ID, and return 20 order summaries.
 
 ```sql

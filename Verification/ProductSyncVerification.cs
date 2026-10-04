@@ -229,15 +229,15 @@ public static partial class Verification
 
     private static async Task VerifyProductEventConsumer()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"product-consumer-{Guid.NewGuid()}.db");
-        var connection = $"Data Source={path};Pooling=False";
-        var options = new DbContextOptionsBuilder<ShopDb>().UseSqlite(connection).Options;
+        var path = $"Verify_product_consumer_{Guid.NewGuid():N}";
+        var connection = VerificationConnection(path);
+        var options = new DbContextOptionsBuilder<ShopDb>().UseSqlServer(connection).Options;
         var client = new ElasticsearchClient(new ElasticsearchClientSettings(
             new Uri("http://localhost:9200")));
         var indexName = $"product-consumer-verify-{Guid.NewGuid():N}";
         var search = new ProductSearchService(client, indexName);
         using var services = new ServiceCollection()
-            .AddDbContext<ShopDb>(o => o.UseSqlite(connection))
+            .AddDbContext<ShopDb>(o => o.UseSqlServer(connection))
             .AddSingleton(search)
             .AddScoped<EventConsumer>()
             .BuildServiceProvider();
@@ -283,7 +283,7 @@ public static partial class Verification
             var unavailableClient = new ElasticsearchClient(new ElasticsearchClientSettings(
                 new Uri("http://127.0.0.1:1")));
             using var unavailableServices = new ServiceCollection()
-                .AddDbContext<ShopDb>(o => o.UseSqlite(connection))
+                .AddDbContext<ShopDb>(o => o.UseSqlServer(connection))
                 .AddSingleton(new ProductSearchService(unavailableClient, indexName))
                 .AddScoped<EventConsumer>()
                 .BuildServiceProvider();
@@ -311,7 +311,7 @@ public static partial class Verification
         finally
         {
             await client.Indices.DeleteAsync(indexName);
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
@@ -349,9 +349,9 @@ public static partial class Verification
 
     private static async Task VerifyProductCatalogWrites()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"product-catalog-{Guid.NewGuid()}.db");
+        var path = $"Verify_product_catalog_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using (var db = new ShopDb(options))
@@ -406,8 +406,8 @@ public static partial class Verification
 
             await using (var db = new ShopDb(options))
                 await db.Database.ExecuteSqlRawAsync("""
-                    CREATE TRIGGER FailProductOutbox BEFORE INSERT ON Outbox
-                    BEGIN SELECT RAISE(ABORT, 'simulated product event failure'); END;
+                    ALTER TABLE [dbo].[Outbox] WITH NOCHECK
+                    ADD CONSTRAINT [CK_VerifyFailProductOutbox] CHECK (1 = 0)
                     """);
             var failed = false;
             try
@@ -424,14 +424,14 @@ public static partial class Verification
                     "Outbox insert failure rolls back the product change");
             }
         }
-        finally { File.Delete(path); }
+        finally { await DeleteVerificationDatabase(options); }
     }
 
     private static async Task VerifyProductEventNeedsNoOrder()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"product-outbox-{Guid.NewGuid()}.db");
+        var path = $"Verify_product_outbox_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using var db = new ShopDb(options);
@@ -452,6 +452,6 @@ public static partial class Verification
             Check(await db.Outbox.CountAsync(m => m.Type == "ProductUpserted") == 1,
                 "A product event can be saved without an order reference");
         }
-        finally { File.Delete(path); }
+        finally { await DeleteVerificationDatabase(options); }
     }
 }

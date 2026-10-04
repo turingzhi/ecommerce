@@ -1,5 +1,7 @@
 # HTTP API reference
 
+[Documentation index](README.md) · [Project overview](../README.md)
+
 The examples use the Compose API at `http://127.0.0.1:5088`. Editable requests are in [auth.http](../Http/auth.http), [orders.http](../Http/orders.http), [payments.http](../Http/payments.http), and [products.http](../Http/products.http). The API uses ASP.NET Core Identity bearer tokens for protected routes; these are Identity's built-in tokens, not JWTs.
 
 ## Authentication
@@ -71,6 +73,12 @@ This request has no payment amount or body. The server calculates the amount fro
 | Missing or invalid authentication | `401` |
 
 The payment endpoint currently maps all service errors to `409`, including missing or unowned orders. See [PaymentEndpoints](../Endpoints/PaymentEndpoints.cs).
+
+## Error responses and retrying requests
+
+The API does not yet expose one uniform error schema. Order and payment handlers return `{ "error": "..." }` for their explicit validation or business errors; search failures use ProblemDetails. Identity endpoints and framework-level binding failures can have different response shapes. Check the status code before parsing a response. See [order endpoints](../Endpoints/OrderEndpoints.cs), [payment endpoints](../Endpoints/PaymentEndpoints.cs), and [search endpoints](../Endpoints/ProductEndpoints.cs).
+
+For an uncertain order or payment-attempt response, retry with the same `Idempotency-Key` and request details. Using a different key requests a new operation. A validation error or changed-payload conflict requires correcting the request, not repeatedly resending it unchanged.
 
 ## Health and service-only operations
 

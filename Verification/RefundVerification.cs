@@ -27,16 +27,16 @@ public static partial class Verification
     // Every scenario owns its database. Service calls and assertions use fresh contexts.
     private static async Task WithRefundScenario(Func<RefundScenario, Task> verify)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-refund-outcomes-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_refund_outcomes_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             await using (var db = new ShopDb(options))
             {
                 await db.Database.EnsureCreatedAsync();
                 db.Products.Add(new Product { Id = 1, PriceCents = 5000, Available = 5 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
             Guid orderId;
             await using (var db = new ShopDb(options))
@@ -75,7 +75,7 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
@@ -231,9 +231,8 @@ public static partial class Verification
             await using (var db = new ShopDb(scenario.Options))
             {
                 await db.Database.ExecuteSqlRawAsync("""
-                    CREATE TRIGGER FailRefundOutbox BEFORE INSERT ON Outbox
-                    WHEN NEW.Type LIKE 'Refund%'
-                    BEGIN SELECT RAISE(ABORT, 'simulated refund event failure'); END;
+                    ALTER TABLE [dbo].[Outbox] WITH NOCHECK
+                    ADD CONSTRAINT [CK_VerifyFailRefundOutbox] CHECK ([Type] NOT LIKE 'Refund%')
                     """);
             }
             var failed = false;
@@ -244,7 +243,8 @@ public static partial class Verification
                 fromUnknown ? new[] { "RefundUnknown" } : Array.Empty<string>());
             await using (var db = new ShopDb(scenario.Options))
             {
-                await db.Database.ExecuteSqlRawAsync("DROP TRIGGER FailRefundOutbox;");
+                await db.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE [dbo].[Outbox] DROP CONSTRAINT [CK_VerifyFailRefundOutbox]");
             }
             var retried = await scenario.Transition(target);
             Check(retried.Error is null && !retried.Replayed && retried.Refund?.Status == target,

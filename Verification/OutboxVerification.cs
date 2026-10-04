@@ -23,9 +23,9 @@ public static partial class Verification
         await VerifyConsumerDeduplication();
         foreach (var failureMode in new[] { "none", "publisher", "marker" })
         {
-            var path = Path.Combine(Path.GetTempPath(), $"ecommerce-outbox-{Guid.NewGuid()}.db");
+            var path = $"Verify_ecommerce_outbox_{Guid.NewGuid():N}";
             var options = new DbContextOptionsBuilder<ShopDb>()
-                .UseSqlite($"Data Source={path};Pooling=False").Options;
+                .UseSqlServer(VerificationConnection(path)).Options;
             try
             {
                 Guid messageId;
@@ -41,8 +41,8 @@ public static partial class Verification
                     if (failureMode == "marker")
                     {
                         await db.Database.ExecuteSqlRawAsync("""
-                            CREATE TRIGGER FailPublishedMarker BEFORE UPDATE ON Outbox
-                            BEGIN SELECT RAISE(ABORT, 'simulated publication marker failure'); END;
+                            ALTER TABLE [dbo].[Outbox] WITH NOCHECK
+                            ADD CONSTRAINT [CK_VerifyFailPublishedMarker] CHECK ([PublishedAt] IS NULL)
                             """);
                     }
                 }
@@ -71,7 +71,8 @@ public static partial class Verification
                     Check(saved.Id == messageId && saved.Payload == "{}" && saved.Type == "OrderCreated",
                         "Dispatch preserves event identity and content");
                     if (failureMode == "marker")
-                        await db.Database.ExecuteSqlRawAsync("DROP TRIGGER FailPublishedMarker;");
+                        await db.Database.ExecuteSqlRawAsync(
+                            "ALTER TABLE [dbo].[Outbox] DROP CONSTRAINT [CK_VerifyFailPublishedMarker]");
                 }
 
                 publisher.Fail = false;
@@ -96,16 +97,16 @@ public static partial class Verification
             }
             finally
             {
-                File.Delete(path);
+                await DeleteVerificationDatabase(options);
             }
         }
     }
 
     private static async Task VerifyConsumerDeduplication()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-consumer-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_consumer_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             Guid messageId;
@@ -151,7 +152,7 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 }

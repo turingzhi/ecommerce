@@ -1,5 +1,7 @@
 # Local workflow demonstration
 
+[Documentation index](README.md) · [Project overview](../README.md)
+
 Run these commands from the `Ecommerce` directory with Docker Desktop running. On a first run, copy `.env.example` to `.env` and set `MSSQL_SA_PASSWORD` to a strong local password. The commands below write sample data to the Compose SQL Server volume; `docker compose down` keeps it, while `docker compose down -v` deletes it.
 
 ## Successful flow: product to order to payment attempt

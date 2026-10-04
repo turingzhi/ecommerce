@@ -14,13 +14,13 @@ public static partial class Verification
     private static async Task WithExpirationWorker(
         Func<DbContextOptions<ShopDb>, OrderExpirationWorker, Task> verify)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-worker-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_worker_{Guid.NewGuid():N}";
         var options = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         try
         {
             var services = new ServiceCollection();
-            services.AddDbContext<ShopDb>(o => o.UseSqlite($"Data Source={path};Pooling=False"));
+            services.AddDbContext<ShopDb>(o => o.UseSqlServer(VerificationConnection(path)));
             services.AddScoped<OrderService>();
             await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
             {
@@ -32,7 +32,7 @@ public static partial class Verification
                 await db.Database.EnsureCreatedAsync();
                 // Fixtures represent inventory already reserved by saved orders.
                 db.Products.Add(new Product { Id = 1, PriceCents = 100, Available = 0 });
-                await db.SaveChangesAsync();
+                await SaveSeedProducts(db);
             }
             using var worker = new OrderExpirationWorker(
                 provider.GetRequiredService<IServiceScopeFactory>(),
@@ -41,7 +41,7 @@ public static partial class Verification
         }
         finally
         {
-            File.Delete(path);
+            await DeleteVerificationDatabase(options);
         }
     }
 
@@ -166,12 +166,10 @@ public static partial class Verification
             db.Orders.AddRange(first, second);
             await db.SaveChangesAsync();
             // Fail only the oldest order, after its stock update but before commit.
-            await db.Database.ExecuteSqlRawAsync("""
-                CREATE TRIGGER FailOldestExpiration BEFORE INSERT ON Outbox
-                WHEN NEW.Type = 'OrderCancelled' AND NEW.OrderId =
-                    (SELECT Id FROM Orders ORDER BY CreatedAt LIMIT 1)
-                BEGIN SELECT RAISE(ABORT, 'simulated expiration event failure'); END;
-                """);
+            await db.Database.ExecuteSqlRawAsync(
+                $"ALTER TABLE [dbo].[Outbox] WITH NOCHECK ADD CONSTRAINT " +
+                $"[CK_VerifyFailOldestExpiration] CHECK " +
+                $"([Type] <> 'OrderCancelled' OR [OrderId] <> '{firstId:D}')");
         }
         await worker.RunBatchAsync(now);
         await using (var db = new ShopDb(options))
@@ -184,7 +182,8 @@ public static partial class Verification
                 "Worker continues to the next order after an individual failure");
             Check((await db.Products.SingleAsync()).Available == 1,
                 "Fresh scope isolates failed stock restoration from the next order");
-            await db.Database.ExecuteSqlRawAsync("DROP TRIGGER FailOldestExpiration;");
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE [dbo].[Outbox] DROP CONSTRAINT [CK_VerifyFailOldestExpiration]");
         }
         await worker.RunBatchAsync(now);
         await worker.RunBatchAsync(now);

@@ -1,8 +1,23 @@
 # C# fundamentals, encapsulation, and dependency injection
 
-This guide covers C# language fundamentals, encapsulation, and dependency injection using examples from this **E-commerce** project. Code snippets are independent examples unless they link to an existing source file. See the [workflow diagrams](workflows.md) for business behavior and the [README](../README.md) for the application overview.
+[Learning index](README.md) · [Documentation index](../README.md)
 
-## 1. What each tool does
+This guide covers C# language fundamentals, encapsulation, and dependency injection using examples from this **E-commerce** project. Code snippets are independent examples unless they link to an existing source file. For the wider backend concepts—HTTP, EF Core, SQL concurrency, queues, search, testing, and deployment—see [the backend learning guide](README.md). The [workflow diagrams](../workflows.md) show business behavior and the [README](../../README.md) describes the application.
+
+## On this page
+
+- [What each tool does](#what-each-tool-does)
+- [C# building blocks](#c-building-blocks)
+- [Encapsulation: protect how state changes](#encapsulation-protect-how-state-changes)
+- [Interfaces and dependency injection](#interfaces-and-dependency-injection)
+- [Lambdas, delegates, and LINQ](#lambdas-delegates-and-linq)
+- [Async work, nullability, and failures](#async-work-nullability-and-failures)
+- [Thread Pool and async/await](#thread-pool-and-asyncawait)
+- [Syntax you will meet in this codebase](#syntax-you-will-meet-in-this-codebase)
+- [How these pieces fit together here](#how-these-pieces-fit-together-here)
+- [Check your understanding](#check-your-understanding)
+
+## What each tool does
 
 | Tool | Role in this project |
 | --- | --- |
@@ -18,16 +33,16 @@ The `.csproj` file defines the target .NET version and package dependencies. A `
 
 Think of these as separate layers: **C# describes the program**, **.NET runs it**, **ASP.NET Core accepts HTTP requests**, **EF Core talks to SQL Server**, and RabbitMQ and Elasticsearch are separate services. C# language rules still apply when the web server or database is absent.
 
-## 2. C# building blocks
+## C# building blocks
 
 - A **class** defines a type; an **object** is an instance of it. A constructor receives values or dependencies when the object is created.
 - A **field** stores data inside an object. A **property** exposes data through `get`, `set`, or `init`. A **method** performs work and can return a value.
 - `var` asks the compiler to infer the type; the variable still has a specific C# type.
 - `string?` permits null. Nullable annotations produce compiler warnings, but do not validate an HTTP request at runtime. The `!` operator suppresses a warning; it does not prevent null.
 - **Generics** keep types explicit: `List<OrderItem>` is a list of order items, `Task<PaymentResult>` is asynchronous work that produces a payment result, and `IEnumerable<ITitleFormatter>` is a sequence of formatters.
-- A **record** is useful for a data carrier. The real [CreateOrder DTO](../Dtos/CreateOrder.cs) uses records for the requested items. Records are not automatically deeply immutable.
+- A **record** is useful for a data carrier. The real [CreateOrder DTO](../../Dtos/CreateOrder.cs) uses records for the requested items. Records are not automatically deeply immutable.
 
-In [OrderService](../Services/OrderService.cs), `public class OrderService(ShopDb db)` uses a **primary constructor**. `db` is supplied when the service is created. Its `Create` method returns `Task<OrderResult>` because it performs asynchronous database work.
+In [OrderService](../../Services/OrderService.cs), `public class OrderService(ShopDb db)` uses a **primary constructor**. `db` is supplied when the service is created. Its `Create` method returns `Task<OrderResult>` because it performs asynchronous database work.
 
 ### Variables, expressions, and control flow
 
@@ -124,7 +139,7 @@ string text = notice.Format(); // "Email notice"
 
 `Notice` cannot be constructed because it is abstract. `EmailNotice` supplies the required `Format` method. Although the variable is typed as `Notice`, C# calls the override on the actual `EmailNotice` object; this is **polymorphism**. A derived class may also override `Preview`, but it does not have to because `Preview` has a default body. `sealed` means no class can inherit from `EmailNotice`.
 
-In the real project, [ShopDb](../Data/ShopDb.cs) inherits from `IdentityDbContext<IdentityUser>` and overrides `OnModelCreating`. Its `base.OnModelCreating(model)` call runs the framework's base configuration before adding this project's mappings.
+In the real project, [ShopDb](../../Data/ShopDb.cs) inherits from `IdentityDbContext<IdentityUser>` and overrides `OnModelCreating`. Its `base.OnModelCreating(model)` call runs the framework's base configuration before adding this project's mappings.
 
 **Overload** and **override** are different. An overload adds another method with the same name but different parameters, such as `Format(string title)` and `Format(string title, string prefix)`. An override changes an inherited overridable method. Declaring a method with `new` in a derived class merely *hides* a base member and is not the same as overriding it.
 
@@ -155,9 +170,9 @@ An **interface** also describes required behavior, but implementing an interface
 
 A record is not automatically deeply immutable. `readonly` stops a field from being reassigned after initialization, while `init` restricts when a property can be assigned; neither prevents a referenced mutable object from changing. `const` is for compile-time constants.
 
-For example, after `var second = first;`, two `class` variables can refer to the same object, so changing that object's state through one variable is visible through the other. Two `struct` variables instead hold separate copies of the struct value. A plain `record` is a reference type with generated value-based equality, useful for data such as [CreateOrderItem](../Dtos/CreateOrder.cs). Value-based equality does not automatically compare the contents of every nested collection.
+For example, after `var second = first;`, two `class` variables can refer to the same object, so changing that object's state through one variable is visible through the other. Two `struct` variables instead hold separate copies of the struct value. A plain `record` is a reference type with generated value-based equality, useful for data such as [CreateOrderItem](../../Dtos/CreateOrder.cs). Value-based equality does not automatically compare the contents of every nested collection.
 
-## 3. Encapsulation: protect how state changes
+## Encapsulation: protect how state changes
 
 **Encapsulation** means an object exposes only the operations other code needs and controls changes to its own state. This illustrative class allows callers to read `Title`, but requires them to call `Rename` to change it:
 
@@ -178,7 +193,7 @@ public class DocumentTitle
 }
 ```
 
-This snippet is **not** an existing E-commerce model. The current EF [models](../Models/Order.cs) mostly have public setters. In this project, important business rules are enforced by services and SQL transactions instead: [OrderService](../Services/OrderService.cs) checks idempotency and stock before changing an order, while the [order endpoint](../Endpoints/OrderEndpoints.cs) validates incoming HTTP data. DTOs also limit which internal data crosses the HTTP boundary. A private setter by itself would not solve concurrent stock updates; the project uses a conditional SQL update for that.
+This snippet is **not** an existing E-commerce model. The current EF [models](../../Models/Order.cs) mostly have public setters. In this project, important business rules are enforced by services and SQL transactions instead: [OrderService](../../Services/OrderService.cs) checks idempotency and stock before changing an order, while the [order endpoint](../../Endpoints/OrderEndpoints.cs) validates incoming HTTP data. DTOs also limit which internal data crosses the HTTP boundary. A private setter by itself would not solve concurrent stock updates; the project uses a conditional SQL update for that.
 
 ### What encapsulation protects
 
@@ -197,25 +212,25 @@ For example, a `private readonly List<string> _notes` field cannot be reassigned
 
 | Boundary | Question | Example in this project |
 | --- | --- | --- |
-| HTTP request | Is the client's input well formed? | [OrderEndpoints](../Endpoints/OrderEndpoints.cs) checks item counts, quantities, and the idempotency key |
-| Business operation | Is this change allowed now? | [PaymentService](../Services/PaymentService.cs) rejects a new payment while another is `Pending` or `Unknown` |
-| Database | Can concurrent requests violate the rule? | [OrderService](../Services/OrderService.cs) conditionally reduces stock inside a transaction |
-| HTTP response | What data should callers see? | [OrderResponse](../Dtos/OrderResponse.cs) maps an internal order to a response DTO |
+| HTTP request | Is the client's input well formed? | [OrderEndpoints](../../Endpoints/OrderEndpoints.cs) checks item counts, quantities, and the idempotency key |
+| Business operation | Is this change allowed now? | [PaymentService](../../Services/PaymentService.cs) rejects a new payment while another is `Pending` or `Unknown` |
+| Database | Can concurrent requests violate the rule? | [OrderService](../../Services/OrderService.cs) conditionally reduces stock inside a transaction |
+| HTTP response | What data should callers see? | [OrderResponse](../../Dtos/OrderResponse.cs) maps an internal order to a response DTO |
 
 A private property setter helps keep code organized, but it is **not a database lock**. Two requests can each pass a C# check before either writes. That is why this project also uses SQL transactions, locks, constraints, and conditional updates. Likewise, a DTO protects the HTTP contract but does not replace server-side validation.
 
-## 4. Interfaces and dependency injection
+## Interfaces and dependency injection
 
 An **interface** describes a contract. Different classes can implement the same contract. **Dependency injection (DI)** means a class receives a collaborator from outside rather than constructing it internally. Constructor injection is DI whether you pass the object manually or a container supplies it.
 
-The project registers an interface and its implementation in [Program.cs](../Program.cs):
+The project registers an interface and its implementation in [Program.cs](../../Program.cs):
 
 ```csharp
 builder.Services.AddScoped<IEventPublisher, RabbitMqEventPublisher>();
 builder.Services.AddScoped<OutboxDispatcher>();
 ```
 
-The [OutboxDispatcher](../Services/OutboxDispatcher.cs) receives `IEventPublisher publisher` in its primary constructor and calls `publisher.PublishAsync(...)`. At runtime, ASP.NET Core supplies `RabbitMqEventPublisher`. This is **composition**: the dispatcher *has a* publisher; it does not inherit from one. The interface makes the publishing behavior replaceable, including in verification code.
+The [OutboxDispatcher](../../Services/OutboxDispatcher.cs) receives `IEventPublisher publisher` in its primary constructor and calls `publisher.PublishAsync(...)`. At runtime, ASP.NET Core supplies `RabbitMqEventPublisher`. This is **composition**: the dispatcher *has a* publisher; it does not inherit from one. The interface makes the publishing behavior replaceable, including in verification code.
 
 ### Injection versus constructing a dependency
 
@@ -252,7 +267,7 @@ builder.Services.AddScoped<ReportService>();
 
 The first registration says, “When something asks for `ITitleFormatter`, create `PlainTitleFormatter`.” The second makes `ReportService` available. A class may have dependencies of its own; the container builds that **object graph** recursively. Registering a service does **not** create every service immediately. It creates a service when some code resolves it and also creates the dependencies that service needs.
 
-In this project, an HTTP handler asks for `OrderService` as a parameter. ASP.NET Core supplies it and its `ShopDb` dependency. [OrderEndpoints](../Endpoints/OrderEndpoints.cs) shows this *method-parameter injection*; [OutboxDispatcher](../Services/OutboxDispatcher.cs) shows *constructor injection*. Both are DI. `IEventPublisher` is an interface, not an object the container can construct; its registration points to the concrete `RabbitMqEventPublisher`.
+In this project, an HTTP handler asks for `OrderService` as a parameter. ASP.NET Core supplies it and its `ShopDb` dependency. [OrderEndpoints](../../Endpoints/OrderEndpoints.cs) shows this *method-parameter injection*; [OutboxDispatcher](../../Services/OutboxDispatcher.cs) shows *constructor injection*. Both are DI. `IEventPublisher` is an interface, not an object the container can construct; its registration points to the concrete `RabbitMqEventPublisher`.
 
 | DI lifetime | Meaning | Example here |
 | --- | --- | --- |
@@ -262,7 +277,7 @@ In this project, an HTTP handler asks for `OrderService` as a parameter. ASP.NET
 
 **Scoped** does not mean “load every scoped service.” A scope is a place to share instances. If one HTTP request asks for `OrderService` twice, it receives the same scoped instance within that request. A different request gets a different instance. If that request never asks for `RefundService`, DI does not create `RefundService` merely because it was registered.
 
-Hosted workers live longer than an HTTP request. [OutboxWorker](../Services/OutboxWorker.cs) creates a new scope for a dispatch batch and resolves the scoped `OutboxDispatcher` inside it. The dispatcher then receives its scoped `ShopDb` and publisher. The worker does not resolve every registered scoped service. Do not hold one `DbContext` in a singleton worker for its entire lifetime; `DbContext` is not thread-safe. Similarly, do not capture a scoped service in a singleton's constructor and keep it forever.
+Hosted workers live longer than an HTTP request. [OutboxWorker](../../Services/OutboxWorker.cs) creates a new scope for a dispatch batch and resolves the scoped `OutboxDispatcher` inside it. The dispatcher then receives its scoped `ShopDb` and publisher. The worker does not resolve every registered scoped service. Do not hold one `DbContext` in a singleton worker for its entire lifetime; `DbContext` is not thread-safe. Similarly, do not capture a scoped service in a singleton's constructor and keep it forever.
 
 ### Multiple implementations of one interface
 
@@ -282,14 +297,14 @@ For example, if both formatter classes have an `Id` property in their shared int
 ### What DI does not do
 
 - DI does not make a class thread-safe, validate business rules, or save objects to the database.
-- DI does not require an interface for every class. [OrderService](../Services/OrderService.cs) is registered and injected as a concrete class.
+- DI does not require an interface for every class. [OrderService](../../Services/OrderService.cs) is registered and injected as a concrete class.
 - DI does not turn an `abstract` class into an instance. You must map an abstract service type to a constructible derived type, just as an interface maps to a concrete implementation.
 - DI is not a database lookup. IDs for orders or payments belong in SQL Server, not in a collection of registered service objects.
 - Avoid constructing `new RabbitMqEventPublisher(...)` inside `OutboxDispatcher`; that would tie the dispatcher to one implementation and make replacement harder.
 
 In verification code, an `IEventPublisher` implementation can record messages or simulate a failure without using a real broker. The dispatcher remains unchanged because it depends on the interface contract. This is one practical reason to inject a collaborator.
 
-## 5. Lambdas, delegates, and LINQ
+## Lambdas, delegates, and LINQ
 
 A **delegate** is a type for a callable method. A **lambda** writes a small function inline:
 
@@ -310,9 +325,9 @@ var orderSummaries = await db.Orders
     .ToListAsync();
 ```
 
-With EF Core's `DbSet`, supported LINQ expressions are translated into a SQL query; `ToListAsync` executes that query and returns a list. With an already loaded `List<Order>`, LINQ runs over objects in memory. Filtering before loading avoids fetching rows you do not need. See the real paginated query in [OrderEndpoints](../Endpoints/OrderEndpoints.cs). `SingleOrDefaultAsync` returns one match or null, but throws if more than one match exists; `AnyAsync` asks whether at least one match exists.
+With EF Core's `DbSet`, supported LINQ expressions are translated into a SQL query; `ToListAsync` executes that query and returns a list. With an already loaded `List<Order>`, LINQ runs over objects in memory. Filtering before loading avoids fetching rows you do not need. See the real paginated query in [OrderEndpoints](../../Endpoints/OrderEndpoints.cs). `SingleOrDefaultAsync` returns one match or null, but throws if more than one match exists; `AnyAsync` asks whether at least one match exists.
 
-## 6. Async work, nullability, and failures
+## Async work, nullability, and failures
 
 An `async` method can `await` asynchronous operations. It commonly returns `Task` or `Task<T>`:
 
@@ -331,7 +346,7 @@ public async Task<Order?> FindOrderAsync(
 
 **Compile-time null warnings are not runtime validation.** For example, check whether a request's idempotency key is blank before passing it to the service. The null-forgiving operator `value!` only silences a warning; if `value` is really null, it remains null at runtime.
 
-`throw` reports an exceptional failure. `try`/`catch` handles one where the code can recover or translate it; `finally` runs when control leaves the block. [OutboxDispatcher](../Services/OutboxDispatcher.cs) catches a publish failure, records a retry time, and rethrows so its worker can log the failure. Expected business rejections in this project often use a result with an `Error` field instead of throwing an exception.
+`throw` reports an exceptional failure. `try`/`catch` handles one where the code can recover or translate it; `finally` runs when control leaves the block. [OutboxDispatcher](../../Services/OutboxDispatcher.cs) catches a publish failure, records a retry time, and rethrows so its worker can log the failure. Expected business rejections in this project often use a result with an `Error` field instead of throwing an exception.
 
 `using` has two meanings:
 
@@ -342,9 +357,63 @@ using var stream = File.OpenRead("example.txt");
 // The stream is disposed when this scope ends.
 ```
 
-`await using` similarly disposes an asynchronously disposable resource, such as the transaction used by [OrderService](../Services/OrderService.cs). Disposing a database transaction is different from garbage collection; if it has not committed, it rolls back its uncommitted work.
+`await using` similarly disposes an asynchronously disposable resource, such as the transaction used by [OrderService](../../Services/OrderService.cs). Disposing a database transaction is different from garbage collection; if it has not committed, it rolls back its uncommitted work.
 
-## 7. Syntax you will meet in this codebase
+### Cancellation and an uncertain outcome
+
+Cancellation is cooperative: code must observe the token or pass it to an operation that supports it. Cancelling a request does not undo an already committed transaction. A client timeout also does not prove the server failed to save the order; retry the same request with the same idempotency key to discover the saved result.
+
+The background workers in this repository propagate their stopping tokens. Current order endpoints and `OrderService.Create` do not propagate an HTTP cancellation token through every database call; the token-bearing example above illustrates a pattern, not complete cancellation coverage in this app.
+
+## Thread Pool and async/await
+
+.NET maintains a Thread Pool to avoid creating a new OS thread for every task.
+
+### Blocking
+
+Example:
+
+```csharp
+Thread.Sleep(5000);
+```
+
+This keeps a thread occupied while doing no useful work.
+
+Too much blocking can cause:
+
+**Thread Pool Starvation**
+
+### I/O-bound Work
+
+Example:
+
+```csharp
+await db.Users.ToListAsync();
+```
+
+While waiting for the database, the current thread can return to the Thread Pool.
+
+Important:
+
+```text
+await
+≠ create a new thread
+```
+
+### CPU-bound Work
+
+Examples:
+
+- Image processing
+- Compression
+- Large calculations
+- Encryption work
+
+The CPU must actually perform the work.
+
+`Task.Run()` moves work to the Thread Pool, but does not create extra CPU capacity.
+
+## Syntax you will meet in this codebase
 
 ### Object creation and initializers
 
@@ -357,7 +426,7 @@ var message = new OutboxMessage
 };
 ```
 
-`new OutboxMessage` creates an object, and the braces set its public properties. The compiler knows the type on the right, so `var message` still has a specific type. When the expected type is already known, C# can shorten `new OutboxMessage()` to `new()`, as [BrokerEvent.ToOutboxMessage](../Services/RabbitMqEventPublisher.cs) does. Creating an object in memory does **not** save it to SQL Server; EF Core must track it and `SaveChangesAsync` must run.
+`new OutboxMessage` creates an object, and the braces set its public properties. The compiler knows the type on the right, so `var message` still has a specific type. When the expected type is already known, C# can shorten `new OutboxMessage()` to `new()`, as [BrokerEvent.ToOutboxMessage](../../Services/RabbitMqEventPublisher.cs) does. Creating an object in memory does **not** save it to SQL Server; EF Core must track it and `SaveChangesAsync` must run.
 
 ### Two uses of `=>`
 
@@ -367,7 +436,7 @@ public string Label() => "Paid";           // Expression-bodied method.
 var paid = orders.Where(o => o.Status == "Paid"); // Lambda passed to Where.
 ```
 
-The first `=>` is a shorter way to write a method that returns one expression. The second creates a function for `Where` to use; `o` is its parameter. [OrderResponse.From](../Dtos/OrderResponse.cs) uses both forms.
+The first `=>` is a shorter way to write a method that returns one expression. The second creates a function for `Where` to use; `o` is its parameter. [OrderResponse.From](../../Dtos/OrderResponse.cs) uses both forms.
 
 ### Extension methods
 
@@ -377,7 +446,7 @@ An extension method is a static method that can be called using object-style syn
 public static WebApplication MapOrderEndpoints(this WebApplication app)
 ```
 
-That declaration in [OrderEndpoints](../Endpoints/OrderEndpoints.cs) allows [Program.cs](../Program.cs) to call `app.MapOrderEndpoints()`. It does not change the `WebApplication` class or require inheritance.
+That declaration in [OrderEndpoints](../../Endpoints/OrderEndpoints.cs) allows [Program.cs](../../Program.cs) to call `app.MapOrderEndpoints()`. It does not change the `WebApplication` class or require inheritance.
 
 ### Equality and pattern checks
 
@@ -389,9 +458,9 @@ var second = new CreateOrderItem(1, 2);
 bool sameValues = first == second; // true for this record.
 ```
 
-`is null` and `is not` test a value or type. For example, `ex is not BrokerDeliveryUnavailableException` in [OutboxDispatcher](../Services/OutboxDispatcher.cs) checks which kind of error occurred. These checks do not modify the object.
+`is null` and `is not` test a value or type. For example, `ex is not BrokerDeliveryUnavailableException` in [OutboxDispatcher](../../Services/OutboxDispatcher.cs) checks which kind of error occurred. These checks do not modify the object.
 
-## 8. How these pieces fit together here
+## How these pieces fit together here
 
 ```text
 POST /orders
@@ -403,9 +472,9 @@ POST /orders
   → endpoint returns a response DTO
 ```
 
-The project uses **Minimal APIs**. `MapPost` chooses a route and `.RequireAuthorization()` protects it; a controller-based API could express comparable behavior with attributes. Choosing Minimal APIs does not change C# classes, interfaces, encapsulation, or DI. See [OrderEndpoints](../Endpoints/OrderEndpoints.cs) and [Program.cs](../Program.cs).
+The project uses **Minimal APIs**. `MapPost` chooses a route and `.RequireAuthorization()` protects it; a controller-based API could express comparable behavior with attributes. Choosing Minimal APIs does not change C# classes, interfaces, encapsulation, or DI. See [OrderEndpoints](../../Endpoints/OrderEndpoints.cs) and [Program.cs](../../Program.cs).
 
-## 9. Check your understanding
+## Check your understanding
 
 1. What is the difference between an `Order` class and one `Order` object?
 2. Why can a `private set` property protect a rule inside one object but not prevent two SQL transactions from racing?
@@ -416,3 +485,8 @@ The project uses **Minimal APIs**. `MapPost` chooses a route and `.RequireAuthor
 7. Why must a long-lived hosted worker create a scope before resolving `ShopDb`?
 8. Why does `new OutboxMessage { ... }` not itself insert a row into SQL Server?
 9. What does `this WebApplication app` mean in an extension method?
+
+
+---
+
+[Learning index](README.md) · Next: [HTTP, ASP.NET Core, and security](http-apis-security.md)

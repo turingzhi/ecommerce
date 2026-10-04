@@ -11,13 +11,13 @@ public static partial class Verification
 {
     public static async Task RunRabbitMq()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ecommerce-rabbitmq-{Guid.NewGuid()}.db");
+        var path = $"Verify_ecommerce_rabbitmq_{Guid.NewGuid():N}";
         var dbOptions = new DbContextOptionsBuilder<ShopDb>()
-            .UseSqlite($"Data Source={path};Pooling=False").Options;
+            .UseSqlServer(VerificationConnection(path)).Options;
         var rabbitOptions = Options.Create(new RabbitMqOptions());
         var publisher = new RabbitMqEventPublisher(rabbitOptions);
         using var services = new ServiceCollection()
-            .AddDbContext<ShopDb>(options => options.UseSqlite($"Data Source={path};Pooling=False"))
+            .AddDbContext<ShopDb>(options => options.UseSqlServer(VerificationConnection(path)))
             .AddScoped<EventConsumer>()
             .BuildServiceProvider();
         using var worker = new RabbitMqConsumerWorker(rabbitOptions,
@@ -131,8 +131,8 @@ public static partial class Verification
             // Fail the consumer's DB write once, then remove the fault before retry.
             await using (var db = new ShopDb(dbOptions))
                 await db.Database.ExecuteSqlRawAsync("""
-                    CREATE TRIGGER FailRabbitConsumer BEFORE INSERT ON ProcessedMessages
-                    BEGIN SELECT RAISE(ABORT, 'simulated consumer database outage'); END;
+                    ALTER TABLE [dbo].[ProcessedMessages] WITH NOCHECK
+                    ADD CONSTRAINT [CK_VerifyFailRabbitConsumer] CHECK (1 = 0)
                     """);
             var retryMessage = new OutboxMessage
             {
@@ -163,7 +163,8 @@ public static partial class Verification
                 RabbitMqTopology.RetryQueue) > retriesBefore,
                 "Temporary consumer database outage at attempt four did not reach retry queue");
             await using (var db = new ShopDb(dbOptions))
-                await db.Database.ExecuteSqlRawAsync("DROP TRIGGER FailRabbitConsumer;");
+                await db.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE [dbo].[ProcessedMessages] DROP CONSTRAINT [CK_VerifyFailRabbitConsumer]");
             await WaitUntilAsync(async () =>
             {
                 await using var db = new ShopDb(dbOptions);
@@ -221,7 +222,7 @@ public static partial class Verification
         finally
         {
             await worker.StopAsync(CancellationToken.None);
-            File.Delete(path);
+            await DeleteVerificationDatabase(dbOptions);
         }
     }
 
