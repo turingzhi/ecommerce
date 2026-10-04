@@ -27,6 +27,8 @@ The API uses DTOs for its HTTP responses and provides example requests in `Http/
 
 ## Architecture
 
+For the order, payment, refund, messaging, and search paths, see the [project workflow diagrams](docs/workflows.md).
+
 ```mermaid
 flowchart LR
     Client[HTTP client] --> API[ASP.NET Core API]
