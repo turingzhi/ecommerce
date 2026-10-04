@@ -1,6 +1,6 @@
 # Project workflow diagrams
 
-These diagrams show the workflows implemented in this project. SQL Server is the source of truth. Payments and refunds have simulated outcomes; there is no bank integration or transfer of real money. The HTTP API exposes registration, login, product search, order creation and reading, and payment-attempt creation. Expiration runs automatically in a background worker. Cancellation, payment outcomes, and refunds are service-level operations rather than public HTTP endpoints.
+These diagrams show the workflows implemented in this project. SQL Server is the source of truth. Payments and refunds have simulated outcomes; there is no bank integration or transfer of real money. The HTTP API exposes registration, login, product search, order creation and reading, and payment-attempt creation. Expiration runs automatically in a background worker. Cancellation, payment outcomes, and refunds are service-level operations rather than public HTTP endpoints. See the [API reference](api.md) for request and response behavior.
 
 ## Customer, order, and stock
 

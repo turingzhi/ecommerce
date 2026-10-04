@@ -22,3 +22,5 @@ The benchmark inserted 20,000 synthetic orders for one customer, warmed the quer
 The previous unique index on `(CustomerId, IdempotencyKey)` does not provide rows in the endpoint's requested order. The new index uses `(CustomerId ASC, CreatedAt DESC, Id DESC)` and includes `Status` and `Currency`, so SQL Server can seek to that customer's newest orders and read the projected fields from the index. The index is configured in `Data/ShopDb.cs` and created by the `AddOrderListIndex` migration.
 
 The plan above came from `SET SHOWPLAN_XML ON` (an estimated plan); reads and server time came from the last executed query in `sys.dm_exec_query_stats`. Client time includes the local SQL client and network round trip. These numbers describe one local synthetic workload, not a general latency guarantee. The logical-read and plan changes provide the stronger evidence that the index matches this query.
+
+See the [API reference](api.md) for the order-list endpoint and [verification guide](verification.md) for the current SQL Server checks.

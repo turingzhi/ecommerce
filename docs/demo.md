@@ -1,4 +1,4 @@
-# Short local demonstration
+# Local workflow demonstration
 
 Run these commands from the `Ecommerce` directory with Docker Desktop running. On a first run, copy `.env.example` to `.env` and set `MSSQL_SA_PASSWORD` to a strong local password. The commands below write sample data to the Compose SQL Server volume; `docker compose down` keeps it, while `docker compose down -v` deletes it.
 
@@ -27,7 +27,7 @@ Run these commands from the `Ecommerce` directory with Docker Desktop running. O
 
 4. Copy that order ID into [payments.http](../Http/payments.http), along with the access token. Send `POST /orders/{orderId}/payments` twice with the same key. Expect HTTP 201, then HTTP 200 with the **same payment ID** and amount `12000` cents. The payment remains `Pending`: creating an attempt does not charge money. Payment success/failure and refunds are service-level simulations covered by the verification runners, not public HTTP endpoints.
 
-What to explain: SQL Server decides stock and price; an idempotency key prevents a repeated request from writing a second order or payment; the Outbox decouples the SQL transaction from RabbitMQ; Elasticsearch is a searchable copy, not the checkout database.
+The order and payment IDs stay the same on replay because each idempotency key identifies an existing request. SQL Server determines stock and price; Elasticsearch is a searchable copy, not the checkout database. The Outbox separates the committed SQL transaction from later RabbitMQ publication.
 
 ## Outage and recovery: Elasticsearch goes offline
 
@@ -50,4 +50,6 @@ curl -G --data-urlencode "q=$recovery_name" http://127.0.0.1:5088/products/searc
 
 Repeat the last search until the product appears. The CLI confirms that SQL Server saved the product even during the search outage. The API's Outbox worker publishes the event; the consumer retains failed product deliveries in RabbitMQ's durable retry queue and indexes the product after Elasticsearch recovers. There can be a short delay for message retry and search-index refresh. Do not use `--index-products` here: this example demonstrates **automatic** recovery.
 
-What to explain: the SQL write succeeds independently of search, `/health` does not test Elasticsearch, and a search 503 does not mean the product was lost. SQL Server remains authoritative throughout the outage.
+The SQL write succeeds independently of search. `/health` checks SQL Server but not Elasticsearch, so search can return 503 while health remains 200. SQL Server remains authoritative throughout the outage.
+
+See the [API reference](api.md) for endpoint details and [product synchronization](product-sync.md) for the recovery path.

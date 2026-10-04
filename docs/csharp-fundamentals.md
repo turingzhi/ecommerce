@@ -1,6 +1,6 @@
 # C# fundamentals, encapsulation, and dependency injection
 
-This guide develops the core C# ideas from the pasted learning notes and connects them to this **E-commerce** project. Read the sections in order if you are new to C#. Code snippets are independent examples unless they link to an existing source file. See the [workflow diagrams](workflows.md) for business behavior.
+This guide covers C# language fundamentals, encapsulation, and dependency injection using examples from this **E-commerce** project. Code snippets are independent examples unless they link to an existing source file. See the [workflow diagrams](workflows.md) for business behavior and the [README](../README.md) for the application overview.
 
 ## 1. What each tool does
 
