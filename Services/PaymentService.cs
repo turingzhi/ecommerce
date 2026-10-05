@@ -53,11 +53,7 @@ public class PaymentService(ShopDb db)
         }
 
         // Calculate the amount from saved purchase prices, not current product prices.
-        long amount = 0;
-        foreach (var item in order.OrderItems)
-        {
-            amount += item.UnitPriceCents * item.Quantity;
-        }
+        var amount = OrderRules.CalculateTotalCents(order.OrderItems);
 
         // Reject a different key while another attempt is pending for this order.
         var result = await db.Payments.AnyAsync(

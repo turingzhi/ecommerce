@@ -28,22 +28,8 @@ public class OrderService(ShopDb db)
             .SingleOrDefaultAsync();
         if (existing is not null)
         {
-            if (existing.OrderItems.Count() != request.Items.Count())
-            {
+            if (!OrderRules.MatchesRequest(existing.OrderItems, request.Items))
                 return new(null, Error: "Idempotency key already used for different order details");
-            }
-            foreach (var item in request.Items)
-            {
-                var matchingItem = existing.OrderItems.FirstOrDefault(savedItem => savedItem.ProductId == item.ProductId);
-                if (matchingItem is null)
-                {
-                    return new(null, Error: "Idempotency key already used for different order details");
-                }
-                if (item.Quantity != matchingItem.Quantity)
-                {
-                    return new(null, Error: "Idempotency key already used for different order details");
-                }
-            }
             return new(existing, true, null);
         }
 

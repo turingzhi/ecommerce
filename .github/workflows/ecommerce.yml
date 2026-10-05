@@ -13,9 +13,11 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Restore
-        run: dotnet restore Ecommerce.csproj
+        run: dotnet restore Ecommerce.sln
       - name: Build
-        run: dotnet build Ecommerce.csproj --no-restore
+        run: dotnet build Ecommerce.sln --no-restore
+      - name: Run unit tests
+        run: dotnet test Ecommerce.sln --no-build --no-restore
       - name: Generate SQL Server password for this run
         run: |
           password="Aa!$(openssl rand -hex 16)"

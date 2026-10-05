@@ -2,19 +2,36 @@
 
 [Documentation index](README.md) · [Project overview](../README.md)
 
-The repository uses custom executable runners rather than a separate `dotnet test` project. Every database-backed runner uses SQL Server. Run the commands below from the repository root.
+The solution has a small xUnit test project as well as custom infrastructure verification runners. Every database-backed runner uses SQL Server. Run the commands below from the repository root.
 
 ## Coverage
 
 | Check | What it exercises | Dependencies |
 | --- | --- | --- |
+| `dotnet test Ecommerce.sln` | Order replay matching and payment totals from saved purchase prices | .NET 10 SDK; no Docker |
 | `--verify` | Order/payment rules, idempotency, cancellation, expiration, refunds, Outbox, and rollback | SQL Server; disposable databases |
 | `--verify-sqlserver` | Concurrent same-key orders, competing payment/refund operations, locking, and rollback | SQL Server; separate `EcommerceVerification` database |
 | `--verify-rabbitmq` | Confirmed publication, duplicate delivery, retries, dead letters, and broker recovery | SQL Server and real RabbitMQ |
 | `--verify-product-sync` | Catalog/Outbox atomicity, stock preservation, version ordering, deduplication, and search outage recovery | SQL Server, RabbitMQ, and Elasticsearch |
 | [HTTP script](../scripts/verify_http.py) | Search, registration/login, checkout and payment-attempt replay/conflicts, authentication, and order ownership | Running API and its Compose dependencies |
 
-The first two runners are service/integration checks. Broker and product-sync checks also exercise real infrastructure. The HTTP script is a smoke/E2E check of one checkout path; payment outcomes and refunds are checked at service level because they have no public HTTP endpoints. There is no separate isolated unit-test or contract-test suite. General test categories are explained in the [testing reference](knowledge/reliability-observability-testing.md#testing).
+The xUnit project contains focused unit tests. The first two custom runners are service/integration checks. Broker and product-sync checks also exercise real infrastructure. The HTTP script is a smoke/E2E check of one checkout path; payment outcomes and refunds are checked at service level because they have no public HTTP endpoints. There is no contract-test suite. General test categories are explained in the [testing reference](knowledge/reliability-observability-testing.md#testing).
+
+## How the checks fit together
+
+The checks exercise the same application at different boundaries; they do not call one another. `dotnet test` checks small C# rules without Docker. The `dotnet run -- --verify...` commands call services against disposable SQL Server databases and, for the focused runners, real RabbitMQ and Elasticsearch. `scripts/verify_http.py` acts as a client of the running API: it sends HTTP requests and checks responses rather than calling C# services directly.
+
+For example, an order request that reuses an idempotency key with a changed quantity is checked at three levels: the unit test rejects the item match, the SQL Server verification checks the saved order and stock, and the HTTP script checks the conflict returned to the client. This overlap catches wiring or persistence mistakes that a rule-only test cannot see.
+
+The [GitHub Actions workflow](../.github/workflows/ecommerce.yml) is the single orchestrator: it builds, runs `dotnet test`, starts the Compose stack, and runs the remaining checks in sequence. One failed step fails the workflow. Locally, `dotnet test Ecommerce.sln` runs only the xUnit tests; use the commands below for the infrastructure and HTTP checks.
+
+## Fast tests
+
+```sh
+dotnet test Ecommerce.sln
+```
+
+These tests do not start the application or its containers. They check that an idempotent order replay accepts the same items regardless of order, rejects changed details, and that payment amounts use saved order-item prices and long arithmetic. They do not replace the SQL Server concurrency or HTTP checks below.
 
 ## SQL Server and infrastructure checks
 
@@ -61,8 +78,8 @@ The script creates fresh test accounts and reserves one unit of the seeded Wirel
 
 On pushes and pull requests, the [Ecommerce workflow](../.github/workflows/ecommerce.yml) runs this sequence:
 
-1. Restore and build the application; generate a temporary SQL Server password.
-2. Start the Compose stack and run `--verify`.
+1. Restore and build the solution, then run the xUnit tests with `dotnet test`.
+2. Generate a temporary SQL Server password, start the Compose stack, and run `--verify`.
 3. Check API health and wait for the seed products to appear in search.
 4. Run the HTTP script and `--verify-sqlserver`.
 5. Pause the API consumer, then run `--verify-rabbitmq` and `--verify-product-sync`.

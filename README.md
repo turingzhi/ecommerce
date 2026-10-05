@@ -90,13 +90,19 @@ The update command changes searchable details, not stock. Replace `3` with the p
 
 ## Verification
 
-The repository has custom verification runners rather than a `dotnet test` project. With the local Compose stack running and `ECOMMERCE_SQLSERVER` set as described in the [verification guide](docs/verification.md), run the SQL Server service checks with:
+The solution includes fast xUnit checks for order replay matching and payment totals. Run them without Docker:
+
+```sh
+dotnet test Ecommerce.sln
+```
+
+The repository also has custom infrastructure verification runners. With the local Compose stack running and `ECOMMERCE_SQLSERVER` set as described in the [verification guide](docs/verification.md), run the SQL Server service checks with:
 
 ```sh
 dotnet run -- --verify
 ```
 
-Focused SQL Server concurrency, RabbitMQ, and product-sync runners are also available. CI runs them against a Compose stack and checks the authenticated HTTP checkout flow with `python3 scripts/verify_http.py`. See [verification commands and scope](docs/verification.md). The [local demonstration](docs/demo.md) covers checkout and Elasticsearch outage recovery.
+Focused SQL Server concurrency, RabbitMQ, and product-sync runners are also available. CI runs the xUnit checks first, then runs the infrastructure checks against a Compose stack and checks the authenticated HTTP checkout flow with `python3 scripts/verify_http.py`. See [how the checks fit together](docs/verification.md#how-the-checks-fit-together) and the [verification commands](docs/verification.md). The [local demonstration](docs/demo.md) covers checkout and Elasticsearch outage recovery.
 
 ## Current limitations
 

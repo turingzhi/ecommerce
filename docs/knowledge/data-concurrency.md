@@ -18,6 +18,7 @@ Follow data from EF Core queries to SQL indexes, transactions, concurrent writes
 - [Partitioning and Sharding](#partitioning-and-sharding)
 - [Distributed Locking](#distributed-locking)
 - [Project examples](#project-examples)
+- [How connection pooling works here](#how-connection-pooling-works-here)
 - [SQL Server and SQLite comparison](#sql-server-and-sqlite-comparison)
 
 ## EF Core and Data Access
@@ -484,7 +485,20 @@ This combines **pessimistic locking** for same-key checkout with an **atomic upd
 
 `FromSqlInterpolated` in these services passes values as parameters while expressing SQL Server lock hints. A normal LINQ lookup, such as `SingleOrDefaultAsync`, is appropriate when the query does not need those hints. The explicit SQL is about the required lock behavior, not about SQL Server generally taking longer to answer a query.
 
-The application uses SQL Server connection pooling with provider defaults. Disposable [verification databases](../../Verification/VerificationDatabase.cs) disable pooling so they can be deleted after each scenario. For thread pools and asynchronous C# execution, see [C# fundamentals](csharp-fundamentals.md#thread-pool-and-asyncawait).
+### How connection pooling works here
+
+The normal API registers a scoped `ShopDb` and chooses the SQL Server provider in [Program.cs](../../Program.cs):
+
+```csharp
+builder.Services.AddDbContext<ShopDb>(options =>
+    options.UseSqlServer(connectionString));
+```
+
+There is no `Pooling=false` in the application's connection string, so the SQL client uses its **default connection pool**. When EF Core needs SQL Server, it opens a connection that the client can take from this pool. After EF Core finishes and closes the connection, the client can return it for another operation. An explicit transaction keeps its connection in use until that transaction ends. This pool belongs to the application's SQL client; it is not a table or setting that this project creates inside SQL Server.
+
+Each HTTP request gets its own scoped `ShopDb`. Background workers create their own scopes. **A `ShopDb` instance is not a pooled SQL connection:** `AddDbContext` does not enable EF Core's separate `DbContext` pooling feature. The [.NET thread pool](csharp-fundamentals.md#thread-pool-and-asyncawait) is also separate; it supplies threads to run C# code.
+
+The disposable [verification databases](../../Verification/VerificationDatabase.cs) explicitly set `Pooling = false` in their SQL connection strings. Those checks create and delete temporary databases, so they avoid keeping connections to a database they are about to delete. The normal API leaves pooling enabled.
 
 
 ### SQL Server and SQLite comparison
