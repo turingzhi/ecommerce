@@ -2,9 +2,9 @@
 
 [Learning index](README.md) · [Documentation index](../README.md)
 
-Start with the request boundary: HTTP, route handling, configuration, identity, and access rules. Code snippets are general examples unless they link to a repository file.
+Learn how an HTTP request reaches application code, how the app identifies the caller, and how it decides what that caller may do. Snippets are teaching examples unless linked to source code.
 
-> **In this project:** This project uses Minimal API endpoints and ASP.NET Core Identity bearer tokens. It checks order ownership in the endpoint and service layers. It does not use controllers, a separate repository layer, OAuth/OIDC federation, or a production API gateway. See [Program.cs](../../Program.cs), [order endpoints](../../Endpoints/OrderEndpoints.cs), and the [API reference](../api.md).
+**In this project:** ASP.NET Core controllers serve a React and TypeScript storefront. ASP.NET Core Identity handles accounts and bearer tokens. Customer routes check ownership; admin routes check separate permission claims. The app limits catalog reads and selected customer writes, including checkout and returns; see [rate policies](../rate-limiting.md). See [Program.cs](../../src/Ecommerce.Api/Program.cs) and the [API reference](../api.md).
 
 ## On this page
 
@@ -22,391 +22,214 @@ Start with the request boundary: HTTP, route handling, configuration, identity, 
 
 ### HTTP
 
-HTTP is the application-layer protocol commonly used for communication between clients and servers.
-
-Common requests:
+HTTP lets a client send a request and receive a response. A request has a method, path, headers, and sometimes a body. The response has a status code, headers, and sometimes a body.
 
 ```http
-GET /users/123
+GET /products/1
 POST /orders
-PUT /users/123
-DELETE /orders/123
+Content-Type: application/json
+Idempotency-Key: checkout-123
 ```
 
-Common status codes:
+These lines show separate requests and example headers. A real `POST /orders` also needs authentication and a JSON body; see the [API reference](../api.md).
 
-- `200 OK` — request succeeded
-- `201 Created` — resource created successfully
-- `204 No Content` — request succeeded with no response body
-- `400 Bad Request` — invalid request
-- `401 Unauthorized` — not authenticated
-- `403 Forbidden` — authenticated but not allowed
-- `404 Not Found` — resource not found
-- `409 Conflict` — resource conflict
-- `429 Too Many Requests` — rate limit exceeded
-- `500 Internal Server Error` — server-side failure
-- `503 Service Unavailable` — service temporarily unavailable
+| Status | Meaning |
+| --- | --- |
+| `200 OK` | The request succeeded |
+| `201 Created` | A resource was created |
+| `204 No Content` | Success with no response body |
+| `400 Bad Request` | The request is invalid |
+| `401 Unauthorized` | Authentication is missing or invalid |
+| `403 Forbidden` | The caller lacks permission |
+| `404 Not Found` | No visible matching resource was found |
+| `409 Conflict` | The request conflicts with the current state |
+| `429 Too Many Requests` | A rate limit was exceeded |
+| `500 Internal Server Error` | An unexpected server failure occurred |
+| `503 Service Unavailable` | The service is temporarily unavailable |
 
 ### REST API
 
-REST-style APIs typically model data as resources.
+REST-style APIs describe resources with URLs and use HTTP methods consistently:
 
 ```text
-GET    /users/123
-POST   /users
-PUT    /users/123
-DELETE /users/123
+GET    /users/123    Read a user
+POST   /users        Create a user
+PUT    /users/123    Replace a user's representation
+DELETE /users/123    Delete a user
 ```
 
-Important ideas:
-
-- Resource-oriented design
-- Correct HTTP method semantics
-- Stateless communication
-- Proper use of HTTP status codes
+This is a general example. `GET` should not change business state. `PUT` and `DELETE` are intended to be idempotent: repeated requests have the same intended effect, even if their response codes differ. `POST` needs an explicit replay mechanism when duplicates would be harmful. A stateless request carries the information needed to process it, such as its access token.
 
 ### Middleware Pipeline
 
-A typical ASP.NET Core request flow:
+Middleware runs around the endpoint handler:
 
 ```text
-Request
-↓
-Earlier middleware (for example, exception handling)
-↓
-Routing: select endpoint
-↓
-Authentication: identify caller
-↓
-Authorization: check endpoint access
-↓
-Endpoint handler (Minimal API or controller)
-↓
-Response
+Request → routing → authentication → authorization → rate limiter → handler
+Response ← earlier middleware receives the result
 ```
 
-This is a simplified request path. Responses unwind through middleware in reverse order, and middleware can end a request early. Minimal APIs can add routing and authentication/authorization middleware automatically; explicit ordering must still respect their dependencies. See [ASP.NET Core middleware](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/middleware?view=aspnetcore-10.0).
-
-Middleware is commonly used for:
-
-- Logging
-- Exception handling
-- Authentication
-- CORS
-- Rate limiting
-- Request tracing
+Middleware can log, trace, handle errors, add CORS headers, or stop a request early. Order matters: authorization needs the authenticated caller, and a customer-specific limiter needs that identity too. This project sets that order explicitly in [Program.cs](../../src/Ecommerce.Api/Program.cs). ASP.NET Core can also add some middleware automatically for Minimal APIs; see [middleware ordering](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/middleware?view=aspnetcore-10.0).
 
 ## ASP.NET Core Layering
 
-A common application structure:
+A common structure is:
 
 ```text
-Controller
-↓
-Service
-↓
-Repository / DbContext
-↓
-Database
+HTTP handler → service → DbContext or repository → database
 ```
 
 ### Controller
 
-Responsibilities:
-
-- Receive HTTP requests
-- Validate input
-- Call application/service logic
-- Return HTTP responses
-
-Controllers should usually stay thin.
+A controller receives requests, validates their shape, calls a service, and returns a response. Keep it small so business rules can be used and tested outside HTTP. This project groups controllers by feature and keeps customer and admin actions separate. `[HttpGet]` and `[HttpPost]` declare routes; `[Authorize]` protects a controller or action.
 
 ### Service
 
-Responsibilities:
-
-- Business rules
-- Workflow coordination
-- Transaction boundaries
-- Calling repositories and external services
+A service enforces business rules, coordinates a workflow, and chooses transaction boundaries. For example, [OrderService](../../src/Ecommerce.Api/Features/Orders/Services/OrderService.cs) checks an idempotency key, reserves stock, and saves the order and event together.
 
 ### Repository
 
-A Repository is an abstraction over data access.
-
-Possible benefits:
-
-- Isolates persistence logic
-- Easier mocking/testing
-- Hides EF Core details
-
-Possible drawbacks:
-
-- `DbContext` already behaves partly like Repository + Unit of Work
-- Too much abstraction may create unnecessary boilerplate
-
-Use it when it adds meaningful value.
+A repository hides persistence behind an interface. It can help when it provides a useful application-specific contract. It can also add boilerplate because EF Core's `DbContext` already tracks changes and groups a save. This project uses `ShopDbContext` directly; it has no separate repository layer.
 
 ### Dependency Injection
 
-ASP.NET Core has built-in Dependency Injection.
-
-Common lifetimes:
-
-- `Transient`
-- `Scoped`
-- `Singleton`
-
-Typical examples:
-
-- `DbContext` → Scoped
-- Application service → Scoped / Transient
-- Shared thread-safe global service → Singleton
+Dependency injection supplies an object with the collaborators it needs. ASP.NET Core's container supports transient, scoped, and singleton lifetimes. `ShopDbContext` and application services are scoped here; the Elasticsearch and Redis clients are singletons. A singleton must be safe to share. See the [C# chapter](csharp-fundamentals.md#interfaces-and-dependency-injection) for examples and worker scopes.
 
 ## Configuration
 
-Common sources:
+Keep environment-specific settings outside the build. The same artifact can then run in Development, Staging, or Production with different values.
 
-- `appsettings.json`
-- Environment Variables
-- Secret stores
-- Command-line arguments
+ASP.NET Core reads settings from sources such as `appsettings.json`, environment variables, command-line arguments, and secret stores. Later sources can override earlier ones. For example, Compose uses `Redis__ConnectionString` to set `Redis:ConnectionString`; the double underscore represents a nested key.
 
-Common environments:
-
-```text
-Development
-Staging
-Production
-```
-
-Core principle:
-
-**Externalized Configuration**
-
-The same build artifact should run in different environments using different configuration.
+Use configuration for a database address or timeout. Keep passwords and other secrets in an appropriate private source. See [Docker setup](../docker.md).
 
 ## Authentication and Authorization
 
 ### Authentication
 
-Answers:
-
-> Who are you?
+Authentication establishes who the caller is. A login exchanges credentials for an access token. The server validates that token on protected requests.
 
 ### Authorization
 
-Answers:
-
-> What are you allowed to do?
-
-Important:
-
-```text
-Authenticated
-≠
-Authorized
-```
+Authorization checks whether that caller may perform this operation. A valid token alone does not grant access to every order or admin action.
 
 ### JWT
 
-A JWT may contain claims such as:
+A JWT is a token format. Its claims may include subject (`sub`), expiry (`exp`), issuer (`iss`), audience (`aud`), roles, or scopes. A signed JWT protects against tampering; its payload is readable unless it is separately encrypted. Servers must validate the signature and expected claims.
 
-```text
-sub
-role
-scope
-exp
-iss
-aud
-```
-
-JWTs are signed, but the payload is not encrypted by default.
+This project's Identity bearer tokens use ASP.NET Core's protected token format. They are not JWTs; see the [official Identity token documentation](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/identity-api-authorization?view=aspnetcore-10.0#use-token-based-authentication).
 
 ### Access Token and Refresh Token
 
-- Access Token — short-lived API access
-- Refresh Token — used to obtain new access tokens
+An access token authorizes API requests for a limited time. A refresh token can obtain a new access token under the issuer's rules. Both are secrets. A browser must store and handle them carefully, and clients must handle expiration.
 
 ### OAuth 2.0
 
-Primarily about delegated authorization.
+OAuth 2.0 defines delegated authorization: a client gets limited access to a resource without receiving the user's password for that resource.
 
 ### OpenID Connect
 
-Built on OAuth 2.0 and adds identity/authentication.
+OpenID Connect adds identity information and login behavior to OAuth 2.0. Neither OAuth federation nor OpenID Connect login is configured in this project.
 
 ### Machine-to-Machine Authentication
 
-Common approaches:
-
-- Client Credentials
-- Managed Identity
-- Workload Identity
+Services can authenticate with client credentials, managed identities, or workload identities. Managed and workload identities can reduce the need to store long-lived credentials. These are options for a future deployment, not this app's current login flow.
 
 ## Authorization Models
 
-Common models:
+| Model | Example rule |
+| --- | --- |
+| Role-based | Only members of the support role may enter a support area |
+| Policy-based | Require authentication and a particular permission claim |
+| Resource-based | Only the owner may read this order |
+| Scope/claim-based | The token must allow the requested operation |
 
-- Role-based Authorization
-- Policy-based Authorization
-- Resource-based Authorization
-- Scope / Claim-based Authorization
+This project uses ownership checks and five independent `permission` claims:
+
+| Claim | Allows |
+| --- | --- |
+| `products:manage` | Catalog administration |
+| `shipments:manage` | Shipment administration |
+| `returns:manage` | Return administration |
+| `orders:read` | Admin order reads |
+| `payments:read` | Admin financial reads |
+
+Possessing one claim does not grant the others. [Program.cs](../../src/Ecommerce.Api/Program.cs) defines the policies; [AdminPermissionGrant](../../src/Ecommerce.Api/Common/Security/AdminPermissionGrant.cs) grants claims to registered accounts through operator commands. Log in again after a grant to receive updated token claims. The [admin guide](../admin.md) explains setup.
 
 ## Web Security
 
 ### CORS
 
-Controls browser cross-origin access.
-
-Important:
-
-> CORS is not Authentication.
+CORS tells a browser which other origins may read a response. It does not authenticate a caller or stop non-browser clients from sending requests. The built storefront is served by the API from the same origin.
 
 ### CSRF
 
-Exploits browsers automatically sending cookies.
-
-Mitigation:
-
-- Anti-CSRF tokens
-- SameSite cookies
-- Origin / Referer checks when appropriate
+CSRF tricks a browser into sending an unwanted request with credentials it attaches automatically, usually cookies. Defenses include anti-CSRF tokens, suitable `SameSite` cookie settings, and origin checks. Evaluate the actual credential flow; a bearer header added by application code behaves differently from an automatically sent cookie.
 
 ### XSS
 
-Malicious JavaScript executes in a user's browser.
+XSS runs attacker-controlled JavaScript in a user's browser. Render text safely, encode output for its context, avoid untrusted HTML, and use a suitable Content Security Policy as another layer.
 
-Mitigation:
-
-- Output encoding
-- CSP
-- Avoid rendering untrusted HTML
-
-`HttpOnly` prevents JavaScript from reading a cookie, but does not stop injected scripts executing or making requests as the user. It limits one consequence of XSS; context-appropriate output encoding and safe rendering remain necessary. See [OWASP XSS prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html).
+`HttpOnly` prevents JavaScript from reading a cookie. Injected scripts may still act as the user, so it does not solve XSS. See [OWASP XSS prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html).
 
 ### SQL Injection
 
-Do not build SQL by concatenating user input.
-
-Bad:
+Do not put untrusted values into SQL text:
 
 ```csharp
-$"SELECT ... '{input}'"
+// Unsafe when input is untrusted:
+var sql = "SELECT * FROM Users WHERE Name = '" + input + "'";
 ```
 
-Use:
-
-**Parameterized Queries**
+Pass values as parameters instead. EF Core LINQ does this. The project's `FromSqlInterpolated` calls also parameterize interpolated values while leaving lock hints in the SQL text. This protection does not make arbitrary user-supplied table or column names safe.
 
 ### SSRF
 
-An attacker controls where the server sends outbound requests.
-
-Possible targets:
-
-- localhost
-- internal networks
-- cloud metadata endpoints
-
-Mitigation:
-
-- Allowlist destinations
-- Block private and link-local ranges
-- Safe DNS / URL resolution
+Server-side request forgery occurs when an attacker controls an outbound request destination. It can expose localhost, private services, or cloud metadata endpoints. For URL-fetching features, allow known destinations and check DNS resolution, IP ranges, and redirects. URL parsing alone is not enough.
 
 ### Path Traversal
 
-Prevent input such as:
-
-```text
-../../
-```
-
-from escaping allowed directories.
+Input such as `../../private-file` can escape an intended directory. Choose server-controlled filenames and verify that resolved paths stay inside the allowed directory.
 
 ### Command Injection
 
-Do not concatenate untrusted data into shell commands.
+Do not build shell commands by concatenating user input. Prefer an API or pass validated arguments directly to a process without a shell.
 
 ### IDOR / Broken Access Control
 
-A user must not gain access to another user's resource simply by changing an ID.
+Changing a resource ID must not give a customer access to another customer's data. Query with both the resource ID and authenticated customer ID, as [OrdersController](../../src/Ecommerce.Api/Features/Orders/Controllers/OrdersController.cs) does. Apply this to writes as well as reads.
 
 ### Mass Assignment
 
-Do not bind public API input directly to database entities.
-
-Use DTOs with only permitted fields, then validate their values and check resource ownership. A DTO by itself does not authorize a change.
+Accept request DTOs with only permitted fields. Do not bind client input straight into a database entity containing trusted fields such as owner, price, or status. A DTO still needs validation and authorization.
 
 ### HTTP contracts and validation
 
-Treat request fields, response fields, status codes, and error shapes as a contract. Validate at three boundaries: request shape at the endpoint, business rules in the service, and persistent invariants with database constraints. Clients must not choose trusted values such as the authenticated customer ID or checkout price.
+The contract includes fields, status codes, pagination, and errors. Validate request shape in the handler, business rules in the service, and stored rules with database constraints. Checkout takes its customer ID from authentication and its price from SQL Server.
 
-For additive changes, introduce optional fields and keep existing consumers working. Renaming required fields or changing their meaning can break clients and needs a migration/versioning plan. Use stable ordering for pagination; offset pages may still shift when new rows arrive. Cursor pagination is an alternative to evaluate for large or rapidly changing lists, not a feature implemented here.
+Optional additive fields are usually easier to introduce than renamed or changed required fields. Breaking changes need a rollout or versioning plan. Use stable pagination ordering; offset pages can still shift as rows change. Cursor pagination is an alternative to study, not a current feature.
 
-The [API reference](../api.md) records the current contract, including its differing error responses.
+The [API reference](../api.md) records the actual responses, including differences between endpoint error shapes.
 
 ## Password Security
 
-Do not store passwords as:
+Store passwords using a dedicated password hashing scheme with a salt and suitable work factor. A plain SHA-256 hash is too fast for this purpose. Common schemes include PBKDF2, bcrypt, scrypt, and Argon2.
 
-- Plaintext
-- Plain SHA256 hashes
-
-Use dedicated password hashing algorithms:
-
-- PBKDF2
-- bcrypt
-- scrypt
-- Argon2
-
-Use:
-
-**Salt**
-
-ASP.NET Core Identity already provides mature password handling.
+A salt makes identical passwords produce different stored hashes. The work factor makes each guess more expensive. ASP.NET Core Identity handles password hashing and verification here; application code should use its account APIs.
 
 ## Secrets Management
 
-Secrets include:
+Database passwords, signing keys, API keys, client secrets, and refresh tokens are secrets. Keep them out of Git, logs, and public browser code. Local development can use ignored environment files or user secrets. Deployed systems can use services such as Azure Key Vault, AWS Secrets Manager, or HashiCorp Vault.
 
-- Database passwords
-- JWT signing keys
-- API keys
-- OAuth client secrets
-
-Do not commit secrets to Git.
-
-Use systems such as:
-
-- Azure Key Vault
-- AWS Secrets Manager
-- HashiCorp Vault
-- Kubernetes Secrets
-
-Important concept:
-
-**Secret Rotation**
-
-Even better:
-
-**Managed Identity / Workload Identity**
-
-This reduces long-lived static secrets.
+Kubernetes Secrets provide a way to distribute secrets, but still need appropriate access controls and encryption configuration. Rotate credentials and plan how running services receive new values. Managed or workload identities can remove some static credentials. This project has local configuration, not a production secret-management service.
 
 ## Project examples
 
-| Concept | How to see it here |
-| --- | --- |
-| HTTP method and status | [OrderEndpoints](../../Endpoints/OrderEndpoints.cs) maps `POST /orders` and `GET /orders`; a new order returns `201`, a replay `200`, and a conflicting key `409`. |
-| Authentication versus authorization | [Program.cs](../../Program.cs) enables authentication and authorization; protected routes require a signed-in user. [OrderEndpoints](../../Endpoints/OrderEndpoints.cs) also filters by that user's ID so a valid token cannot read someone else's order. |
-| DTO and encapsulation | [CreateOrder](../../Dtos/CreateOrder.cs) is an input shape. The endpoint validates it, the service enforces business rules, and [OrderResponse](../../Dtos/OrderResponse.cs) controls output. A DTO does not replace SQL constraints or transaction checks. |
-| Dependency injection | [Program.cs](../../Program.cs) registers scoped `ShopDb` and services, an `IEventPublisher` implementation, and a singleton Elasticsearch client. An endpoint receives `OrderService`; [OutboxDispatcher](../../Services/OutboxDispatcher.cs) receives `IEventPublisher`. |
-| Background-service scope | [OutboxWorker](../../Services/OutboxWorker.cs) creates a scope for each batch before resolving scoped services. It does not keep one `DbContext` for its lifetime. |
-| `async`/`await` | Endpoints and services await database and broker I/O. Waiting need not occupy a request thread; `await` does not mean “start a new thread” or make SQL itself execute faster. |
+Trace `POST /orders` in [OrdersController](../../src/Ecommerce.Api/Features/Orders/Controllers/OrdersController.cs): authentication supplies the customer ID, validation checks the items and key, DI supplies `OrderService`, and the handler maps its result to `201`, `200` for a replay, or `409` for a conflict.
 
-ASP.NET Core Identity handles account registration and bearer-token login. Protected endpoints require authentication; order and payment code additionally checks resource ownership. The public API accepts DTOs rather than binding input directly to database entities. SQL values in `FromSqlInterpolated` are parameterized. The current project does not implement OAuth/OIDC federation, roles, an API gateway, or rate limiting. These are separate topics in the general backend guide, not automatic properties of having bearer tokens.
+Read an order with `GET /orders/{id}` to see ownership filtering. Compare that with an admin policy to see why customer access and admin permissions are separate. The [rate-limiting guide](../rate-limiting.md) explains fixed windows, per-IP catalog reads, per-customer creation limits, and `429` responses.
+
+For background work, [OutboxWorker](../../src/Ecommerce.Api/Infrastructure/Messaging/Outbox/OutboxWorker.cs) creates a scope before resolving its dispatcher. This gives the batch its own scoped database context. Awaiting database or broker I/O avoids holding a request thread while waiting; it does not make that dependency faster.
 
 ---
 

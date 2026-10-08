@@ -1,146 +1,110 @@
-# Project workflow diagrams
+# Project workflows
 
 [Documentation index](README.md) · [Project overview](../README.md)
 
-These diagrams show the workflows implemented in this project. SQL Server is the source of truth. Payments and refunds have simulated outcomes; there is no bank integration or transfer of real money. The HTTP API exposes registration, login, product search, order creation and reading, and payment-attempt creation. Expiration runs automatically in a background worker. Cancellation, payment outcomes, and refunds are service-level operations rather than public HTTP endpoints. See the [API reference](api.md) for request and response behavior.
+SQL Server is the source of truth for commerce. Search and fulfillment can lag behind a committed event. Payment and refund outcomes are simulations. See the [API reference](api.md) for routes and responses.
 
 ## Customer, order, and stock
 
-```mermaid
-flowchart TD
-    A[Search products; login not required] --> B[Register or log in before checkout]
-    B --> C[POST /orders with Idempotency-Key]
-    C --> T[Begin SQL transaction]
-    T --> D{Was this customer and key used before?}
-    D -->|Same items| E[Return existing order with its current status; end transaction]
-    D -->|Different items| X[Reject request; end transaction]
-    D -->|No| F{Do the requested products exist?}
-    F -->|No| Y[Reject; transaction rolls back]
-    F -->|Yes| H[Conditionally reduce stock for each item]
-    H -->|No row updated| Y
-    H -->|All updates succeed| I[Save order and purchase-price snapshots]
-    I --> J[Save OrderCreated Outbox event]
-    J --> K[Commit: order PendingPayment]
-    K --> L{What happens next?}
-    L -->|Payment attempt| P[See payment flow below]
-    L -->|Cancel with no unresolved payment| M[Restore stock; order Cancelled; OrderCancelled event]
-    L -->|15 minutes pass with no unresolved payment| N[Expiration worker restores stock; order Cancelled; OrderCancelled event]
-```
+Catalog browsing and search are public. Checkout requires login and an `Idempotency-Key`.
 
-Order creation saves the stock change, order, and Outbox event in one SQL transaction. An early failure rolls the transaction back. A `Pending` or `Unknown` payment blocks cancellation and expiration. The expiration worker checks eligible orders every minute. See [OrderService](../Services/OrderService.cs) and [OrderExpirationWorker](../Services/OrderExpirationWorker.cs).
+1. `POST /orders` validates the items and calls `OrderService.Create`.
+2. A SQL transaction checks the customer's key. Matching items replay the saved order; different items conflict.
+3. Each stock update succeeds only when enough stock remains. A missing product or failed update rolls back the whole transaction.
+
+   Stock operations currently follow item order rather than a common product order.
+   Concurrent multi-product operations can deadlock; see the
+   [review](architecture-review.md#6-stock-lock-ordering-can-deadlock--medium-risk).
+4. The transaction commits the `PendingPayment` order, saved purchase prices, and one `OrderCreated` Outbox row.
+
+`POST /cart/checkout` first checks SQL for an existing customer/key, so a completed checkout can replay even if Redis is unavailable or the cart has changed. For a new key it reads the cart, then uses the same order service. Checkout preserves the cart. See [cart](cart.md).
+
+A customer can cancel a `PendingPayment` order when it has no `Pending` or `Unknown` payment. Cancellation restores stock and commits `Cancelled` plus an `OrderCancelled` event. The expiration worker does the same for eligible orders at least 15 minutes old, polling every minute in batches of up to 100. Payment creation, outcomes, cancellation, and expiration serialize on the SQL order row.
+
+Sources: [OrderService](../src/Ecommerce.Api/Features/Orders/Services/OrderService.cs), [OrderExpirationWorker](../src/Ecommerce.Api/Features/Orders/Services/OrderExpirationWorker.cs), and [CartController](../src/Ecommerce.Api/Features/Cart/Controllers/CartController.cs).
 
 ### Two requests with the same idempotency key
 
-The SQL Server API starts the transaction **before** checking the key. `OrderService.Create` checks `(CustomerId, IdempotencyKey)` through the unique index with `UPDLOCK` and `HOLDLOCK`. If no order exists yet, SQL Server protects that key range until the transaction ends. A second request using the same customer and key waits rather than also deciding that the key is unused.
+Order creation starts the transaction before checking `(CustomerId, IdempotencyKey)`. SQL Server uses `UPDLOCK` and `HOLDLOCK` through the unique key index to protect an existing row or a missing-key range.
 
 ```mermaid
 sequenceDiagram
     participant A as Request A
     participant B as Request B
     participant DB as SQL Server
-    A->>DB: Begin transaction
-    A->>DB: Check customer + key with UPDLOCK, HOLDLOCK
-    DB-->>A: No order yet; hold key-range lock
-    B->>DB: Begin transaction and check the same key
-    Note over B,DB: B waits for A to finish
-    A->>DB: Save order and one OrderCreated Outbox row
-    A->>DB: Commit; release lock
-    DB-->>B: Existing order is now visible
-    B->>DB: End transaction without writing
-    Note over B: Return A's order as a replay
+    A->>DB: Begin transaction; check customer and key
+    DB-->>A: No order; hold key-range lock
+    B->>DB: Begin transaction; check same customer and key
+    Note over B,DB: Wait for A
+    A->>DB: Save stock changes, order, and Outbox event
+    A->>DB: Commit and release lock
+    DB-->>B: Existing order
+    B->>DB: End transaction without another write
+    Note over B: Return saved order as replay
 ```
 
-If A rolls back instead, B can continue and create the order. The unique `(CustomerId, IdempotencyKey)` index is a final database safeguard against two orders with the same key. The order, stock changes, and one `OrderCreated` Outbox row commit together; a replay returns before another Outbox row is added. This describes the current checkout path, not a separate uniqueness rule on the Outbox table. The [SQL Server concurrent verification](../Verification/SqlServerOrderConcurrencyVerification.cs) checks two same-key calls leave one order, one stock deduction, and one `OrderCreated` event.
-
-The [SQL Server and SQLite comparison](knowledge/data-concurrency.md#sql-server-and-sqlite-comparison) explains the concurrency differences and trade-offs. The current API and verification runners use SQL Server.
+If A rolls back, B can create the order. The unique index is a final safeguard. [Concurrent SQL verification](../src/Ecommerce.Api/Verification/SqlServerOrderConcurrencyVerification.cs) checks that two same-key calls leave one order, one stock deduction, and one event. The [database concurrency guide](knowledge/data-concurrency.md) explains the locking tradeoffs.
 
 ## Payment attempts and outcomes
 
+`POST /orders/{orderId}/payments` replays the same key after checking ownership. A new key requires `PendingPayment` and no unresolved payment. The amount comes from the order's saved prices.
+
 ```mermaid
-flowchart TD
-    A[POST /orders/id/payments with key] --> B{Same key already used?}
-    B -->|Yes| C[Return existing payment]
-    B -->|No| D{Order still PendingPayment?}
-    D -->|No| X[Reject]
-    D -->|Yes| E{Another payment Pending or Unknown?}
-    E -->|Yes| Y[Reject new attempt]
-    E -->|No| F[Create Pending payment using saved order prices]
-    F --> G{Simulated outcome}
-    G -->|Success| H[Payment Succeeded; order Paid; OrderPaid event]
-    G -->|Failure| I[Payment Failed; order stays PendingPayment; PaymentFailed event]
-    G -->|Timeout| J[Payment Unknown; outcome unresolved]
-    I --> K[New payment attempt may be created]
-    J -->|Later succeeds| H
-    J -->|Later fails| I
+stateDiagram-v2
+    [*] --> Pending: Create attempt
+    Pending --> Succeeded: Success
+    Pending --> Failed: Failure
+    Pending --> Unknown: Timeout
+    Unknown --> Succeeded: Later success
+    Unknown --> Failed: Later failure
 ```
 
-`Unknown` means the result is unresolved. It blocks a different payment attempt, cancellation, and expiration until it becomes `Succeeded` or `Failed`. A failed payment can be followed by a new attempt while the order remains `PendingPayment`. Payment creation has an HTTP endpoint; the outcome methods are service-level simulations. See [PaymentService](../Services/PaymentService.cs).
+| Outcome | Effect |
+| --- | --- |
+| `Succeeded` | Order becomes `Paid`; the transaction saves an `OrderPaid` event |
+| `Failed` | Order remains `PendingPayment`; saves `PaymentFailed`; a new attempt may be created |
+| `Unknown` | Result is unresolved; blocks new attempts, cancellation, and expiration |
+
+A timeout does not emit a payment event. Matching terminal outcomes replay; incompatible outcomes conflict. Authenticated Development-only simulators expose the service outcome methods. See [payments](payments.md) and [PaymentService](../src/Ecommerce.Api/Features/Payments/Services/PaymentService.cs).
 
 ## Refunds after successful payment
 
-```mermaid
-flowchart TD
-    A[Paid order and Succeeded payment] --> B[Create refund with amount and key]
-    B --> C{Same key already used?}
-    C -->|Same amount| D[Return existing refund]
-    C -->|Different amount| X[Reject]
-    C -->|No| E{Another refund Pending or Unknown?}
-    E -->|Yes| Y[Reject for now]
-    E -->|No| F{Amount within remaining refundable balance?}
-    F -->|No| Z[Reject]
-    F -->|Yes| G[Create Pending refund]
-    G --> H{Simulated outcome}
-    H -->|Success| I[Refund Succeeded; amount counts toward refunded total; RefundSucceeded event]
-    H -->|Failure| J[Refund Failed; amount can be tried again; RefundFailed event]
-    H -->|Timeout| K[Refund Unknown; wait for resolution; RefundUnknown event]
-    K -->|Later succeeds| I
-    K -->|Later fails| J
-    I --> L{Balance remains?}
-    L -->|Yes| B
-```
+Refund creation requires a `Paid` order and its `Succeeded` payment. The service locks the payment row, replays a matching key/amount, rejects a changed amount, and allows one unresolved refund at a time. Refunds can be partial, but reserved and successful amounts must stay within the original payment.
 
-Refunds can be partial. Successful refunds reduce the remaining refundable amount; failed refunds do not. Refunding does not change the order's `Paid` status or restore stock. Refund creation and outcomes are service-level operations without public refund HTTP endpoints. See [RefundService](../Services/RefundService.cs).
+Refunds use `Pending`, `Unknown`, `Succeeded`, and `Failed` states like payments. Success reduces the refundable balance; failure releases that amount for another attempt; timeout leaves it unresolved. Refund outcome changes save `RefundSucceeded`, `RefundFailed`, or `RefundUnknown` events. Refunds leave the order `Paid`, preserve stock, and leave fulfillment unchanged. See [payments](payments.md) and [RefundService](../src/Ecommerce.Api/Features/Refunds/Services/RefundService.cs).
 
 ## Outbox, RabbitMQ, retries, and product search
 
-```mermaid
-flowchart TD
-    A[Order, payment, refund, or catalog change] --> B[Save Outbox event in SQL Server]
-    B --> C[Outbox worker publishes to RabbitMQ]
-    C --> D{Broker confirms publication?}
-    D -->|Yes| E[Mark SQL Outbox event published]
-    D -->|Delivered| G[RabbitMQ consumer receives event]
-    D -->|Broker unavailable| F[Keep SQL event and retry later]
-    F --> C
-    D -->|Other publishing error| O{Total publish attempts at least 5?}
-    O -->|No| F
-    O -->|Yes| Q[Mark SQL Outbox event dead-lettered]
-    G --> H{Event ID already processed?}
-    H -->|Yes: duplicate| I[Acknowledge without repeating work]
-    H -->|No| J{ProductUpserted?}
-    J -->|Yes| K[Index versioned product snapshot in Elasticsearch]
-    J -->|No| L[Record processed ID only]
-    K --> L
-    L --> I
-    G -->|Temporary database outage| R[Retry queue: wait about 2 seconds]
-    K -->|Temporary Elasticsearch outage| R
-    R --> G
-    G -->|Other processing error| S{Fifth failed processing attempt?}
-    K -->|Other indexing error| S
-    S -->|No| R
-    S -->|Yes| T[RabbitMQ dead-letter queue]
-```
+1. A business transaction saves its Outbox event in SQL.
+2. The Outbox worker publishes a persistent RabbitMQ message. It marks SQL `PublishedAt` only after confirmation.
+3. The consumer processes the event, saves its ID in `ProcessedMessages`, then acknowledges the delivery. Saved IDs skip repeated work.
 
-The SQL Outbox dead-letter flag and the RabbitMQ dead-letter queue are separate. Broker outages keep Outbox publication retryable beyond five attempts, while still increasing its total attempt count. A later non-transport publication failure can dead-letter the SQL row immediately once that count is at least five. Temporary database and Elasticsearch outages do not consume the consumer's five-attempt limit. For other consumer failures, the fifth **total failed processing attempt** moves the event to RabbitMQ's dead-letter queue. A crash after broker confirmation but before marking the Outbox row published can deliver the same event again; `ProcessedMessages` prevents repeated consumer work. Product indexing also uses product ID and version to tolerate replay or out-of-order events. See [OutboxDispatcher](../Services/OutboxDispatcher.cs), [RabbitMqConsumerWorker](../Services/RabbitMqConsumerWorker.cs), and [EventConsumer](../Services/EventConsumer.cs).
+There are two active consumer effects:
 
-Product search follows a separate read path:
+| Event | Work before acknowledgement |
+| --- | --- |
+| `ProductUpserted` | Index a versioned Elasticsearch snapshot, increment the Redis search generation, and save the processed ID |
+| `OrderPaid` | Validate the paid order/payment and atomically save one shipment, initial history, and the processed ID |
+| Other events | Save the processed ID |
+
+A crash after broker confirmation or before acknowledgement can cause replay. SQL publication retries broker outages with backoff. Consumer retry messages wait about two seconds; the fifth counted processing failure goes to RabbitMQ's dead queue. Database and Elasticsearch outages bypass that consumer limit. SQL Outbox dead-letter flags and RabbitMQ's dead queue are separate. See [RabbitMQ](rabbitmq.md) for exact failure classification and timing.
+
+Search checks the [Redis cache](redis.md), then Elasticsearch on a miss. A valid query returns paginated matches or an empty result; unavailable Elasticsearch returns 503 when no cache result is usable. Catalog writes reach search through the Outbox, so checkout always rechecks SQL price and stock. SQL catalog browse/detail routes read current data directly. See [product synchronization](product-sync.md).
+
+## Fulfillment after payment
 
 ```mermaid
 flowchart LR
-    A[GET /products/search?q=...] --> B[ProductSearchService]
-    B --> C[(Elasticsearch product index)]
-    C -->|Matches or no matches| D[HTTP 200: up to 20 products]
-    C -->|Unavailable| E[HTTP 503]
+    Paid[Paid order] --> Event[OrderPaid delivery]
+    Event --> Pending[Pending shipment]
+    Pending --> Shipped[Shipped with tracking]
+    Shipped --> Delivered[Delivered]
 ```
 
-Catalog creation and updates through `ProductCatalogService` create `ProductUpserted` Outbox events. The consumer copies these snapshots into Elasticsearch, so search can briefly lag behind SQL Server. Checkout always checks current price and stock in SQL Server. Other event types currently result only in a processed-message marker; they do not trigger fulfillment or email. See [ProductCatalogService](../Services/ProductCatalogService.cs), [ProductSearchService](../Search/ProductSearchService.cs), and [ProductEndpoints](../Endpoints/ProductEndpoints.cs).
+Shipment creation is asynchronous; the owner can receive 404 until the event is consumed. SQL locking and a unique order/shipment relationship keep one shipment even across distinct valid event IDs. Each real transition saves history atomically. Authorized operators move `Pending → Shipped → Delivered`; equivalent replays succeed, while skipped/backward transitions or changed tracking conflict. Order status and stock stay unchanged. See [fulfillment](fulfillment.md).
+
+## Delivered-order returns
+
+An owner can request one whole-order return for a paid, delivered order with some refundable balance. A matching key/reason replays the request. Operators advance `Requested → Approved → Received → Completed`; states cannot be skipped or reversed.
+
+At `Received`, operators create partial or full refunds through the existing refund service. Completion is an explicit action requiring the full payment amount to have succeeded in refunds and no `Pending`/`Unknown` refund. A failed refund contributes no settled amount and can be retried with a new attempt. Returns do not restock inventory. Return mutations lock Order → Payment → Return in that order; refund creation serializes on the payment row. See [fulfillment](fulfillment.md) and [ReturnService](../src/Ecommerce.Api/Features/Returns/Services/ReturnService.cs).

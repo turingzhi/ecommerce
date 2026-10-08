@@ -1,0 +1,11 @@
+@baseUrl = http://127.0.0.1:5088
+
+### Check API and database health
+GET {{baseUrl}}/health
+
+
+### API process liveness; does not check dependencies
+GET {{baseUrl}}/health/live
+
+### SQL Server, RabbitMQ, Elasticsearch, and Redis statuses
+GET {{baseUrl}}/health/dependencies

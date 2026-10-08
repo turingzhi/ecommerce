@@ -1,91 +1,171 @@
 # Verification
 
-[Documentation index](README.md) · [Project overview](../README.md)
-
-The solution has a small xUnit test project as well as custom infrastructure verification runners. Every database-backed runner uses SQL Server. Run the commands below from the repository root.
-
-## Coverage
-
-| Check | What it exercises | Dependencies |
-| --- | --- | --- |
-| `dotnet test Ecommerce.sln` | Order replay matching and payment totals from saved purchase prices | .NET 10 SDK; no Docker |
-| `--verify` | Order/payment rules, idempotency, cancellation, expiration, refunds, Outbox, and rollback | SQL Server; disposable databases |
-| `--verify-sqlserver` | Concurrent same-key orders, competing payment/refund operations, locking, and rollback | SQL Server; separate `EcommerceVerification` database |
-| `--verify-rabbitmq` | Confirmed publication, duplicate delivery, retries, dead letters, and broker recovery | SQL Server and real RabbitMQ |
-| `--verify-product-sync` | Catalog/Outbox atomicity, stock preservation, version ordering, deduplication, and search outage recovery | SQL Server, RabbitMQ, and Elasticsearch |
-| [HTTP script](../scripts/verify_http.py) | Search, registration/login, checkout and payment-attempt replay/conflicts, authentication, and order ownership | Running API and its Compose dependencies |
-
-The xUnit project contains focused unit tests. The first two custom runners are service/integration checks. Broker and product-sync checks also exercise real infrastructure. The HTTP script is a smoke/E2E check of one checkout path; payment outcomes and refunds are checked at service level because they have no public HTTP endpoints. There is no contract-test suite. General test categories are explained in the [testing reference](knowledge/reliability-observability-testing.md#testing).
+Run commands from the repository root unless stated otherwise.
+Use the .NET 10 SDK, Python 3, and Node 22 (22.12 or newer within that major version).
 
 ## How the checks fit together
 
-The checks exercise the same application at different boundaries; they do not call one another. `dotnet test` checks small C# rules without Docker. The `dotnet run -- --verify...` commands call services against disposable SQL Server databases and, for the focused runners, real RabbitMQ and Elasticsearch. `scripts/verify_http.py` acts as a client of the running API: it sends HTTP requests and checks responses rather than calling C# services directly.
+| Check | Boundary | Needs |
+| --- | --- | --- |
+| Backend unit tests | C# rules, contracts, admin setup, telemetry, and controller HTTP behavior | .NET SDK |
+| Frontend unit tests | UI state, API client, permissions, and retry behavior | Node and installed packages |
+| SQL integration runners | Transactions, locks, schema constraints, and rollback | SQL Server |
+| Broker runners | Publication, retries, deduplication, and indexing | SQL, RabbitMQ, and sometimes Elasticsearch |
+| HTTP scripts | Requests against the real API | Running Compose stack |
+| Browser checks | Storefront against the real API | Compose and Chromium |
 
-For example, an order request that reuses an idempotency key with a changed quantity is checked at three levels: the unit test rejects the item match, the SQL Server verification checks the saved order and stock, and the HTTP script checks the conflict returned to the client. This overlap catches wiring or persistence mistakes that a rule-only test cannot see.
+Each layer checks different wiring. A successful build does not run these checks.
 
-The [GitHub Actions workflow](../.github/workflows/ecommerce.yml) is the single orchestrator: it builds, runs `dotnet test`, starts the Compose stack, and runs the remaining checks in sequence. One failed step fails the workflow. Locally, `dotnet test Ecommerce.sln` runs only the xUnit tests; use the commands below for the infrastructure and HTTP checks.
+The [architecture review](architecture-review.md) inspected source without running
+these application checks. It identifies missing boundary/concurrency cases and a
+search verification race: a global generation change can belong to another event.
+Wait for the expected updated result or its own processed marker when checking freshness.
 
 ## Fast tests
 
 ```sh
 dotnet test Ecommerce.sln
+npm --prefix src/storefront ci
+npm --prefix src/storefront test
+npm --prefix src/storefront run build
 ```
 
-These tests do not start the application or its containers. They check that an idempotent order replay accepts the same items regardless of order, rejects changed details, and that payment amounts use saved order-item prices and long arithmetic. They do not replace the SQL Server concurrency or HTTP checks below.
+These do not need Docker. Node 25's experimental storage can conflict with jsdom;
+use `NODE_OPTIONS=--no-experimental-webstorage` for the frontend test command on that version.
 
 ## SQL Server and infrastructure checks
 
-Copy `.env.example` to `.env`, set `MSSQL_SA_PASSWORD`, and start the stack:
-
-```sh
-cp -n .env.example .env
-# Set MSSQL_SA_PASSWORD in .env.
-docker compose up -d --build --wait
-```
-
-Set `ECOMMERCE_SQLSERVER` in the terminal running verification. Its password must match `.env`:
+Start the [Docker stack](docker.md) and set the verification connection string.
+Replace the password with your local SQL password from `.env`:
 
 ```sh
 export ECOMMERCE_SQLSERVER='Server=127.0.0.1,14333;Database=Ecommerce;User Id=sa;Password=YOUR_LOCAL_PASSWORD;Encrypt=True;TrustServerCertificate=True'
-dotnet run -- --verify
-dotnet run -- --verify-sqlserver
+dotnet run --project src/Ecommerce.Api -- --verify
 ```
 
-These runners write verification data outside the application's `Ecommerce` database. The focused SQL Server runner includes the [same-key lock sequence](workflows.md#two-requests-with-the-same-idempotency-key).
+Most runners create and delete temporary GUID databases. `--verify-sqlserver` uses
+the separate `EcommerceVerification` database and retains its test rows. They use
+`ECOMMERCE_SQLSERVER`, not the API's `ConnectionStrings__ShopDatabase` setting.
 
-Pause the Compose API before the broker runners so its consumer cannot take their verification deliveries. Keep SQL Server, RabbitMQ, and Elasticsearch running:
+| Flag | Coverage |
+| --- | --- |
+| `--verify` | Checkout, payment/refund rules, cancellation, expiration, Outbox, and rollback |
+| `--verify-sqlserver` | Concurrent requests, lock behavior, and stock/payment/refund conflicts |
+| `--verify-catalog` | Catalog versions, stock preservation, and write atomicity |
+| `--verify-telemetry` | Safe telemetry and saved Outbox trace context |
+| `--verify-shipments` | Shipment creation, history/status races, constraints, and rollback |
+| `--verify-returns` | Return rules, refund/completion races, and rollback |
+| `--verify-rabbitmq` | Confirms, retries, dead letters, duplicates, fulfillment, and trace correlation |
+| `--verify-product-sync` | SQL → Outbox → RabbitMQ → Elasticsearch and outage recovery |
+
+For shared broker checks, stop the API consumer so it cannot take test messages.
+Keep the dependencies running:
 
 ```sh
 docker compose stop ecommerce
-dotnet run -- --verify-rabbitmq
-dotnet run -- --verify-product-sync
+dotnet run --project src/Ecommerce.Api -- --verify-rabbitmq
+dotnet run --project src/Ecommerce.Api -- --verify-product-sync
 docker compose up -d --wait ecommerce
 ```
 
-Both broker runners use temporary SQL Server databases and remove them when finished. Restart the API afterward even if a check fails.
+Always restore the API after these checks, including after a failure.
 
-## HTTP smoke/E2E check
+## HTTP checks
 
-With the API running:
+Start the default Compose API, then run a script:
 
 ```sh
-python3 scripts/verify_http.py
+python3 tests/http/verify_catalog_admin_http.py
 ```
 
-The script creates fresh test accounts and reserves one unit of the seeded Wireless Mouse each run. It therefore changes the local application's data and needs available seed stock. It checks responses over real HTTP, including replay with the same key, conflict with changed details, and another customer's inability to read the order. See the [local demonstration](demo.md) for a manual walkthrough and Elasticsearch recovery example.
+The table uses filenames under `tests/http`. Each script checks authentication and
+relevant response/state rules as well as the behavior listed below.
+
+| Script | Coverage | Extra mode |
+| --- | --- | --- |
+| `verify_checkout_http.py` | Checkout/payment replay and customer ownership | Requires available sample mouse stock |
+| `verify_cancellation_http.py` | Repeat-safe cancellation and exact stock restoration | — |
+| `verify_search_http.py` | Filters, sorting, totals, pagination, and cache freshness | — |
+| `verify_catalog_admin_http.py` | Catalog permissions, writes, versions, and stock preservation | — |
+| `verify_storefront_support_http.py` | Identity snapshot, UI config, and payment recovery | `--development` |
+| `verify_admin_reads_http.py` | Independent read grants, cross-customer lists/details, and filters | — |
+| `verify_default_admin_http.py` | Configured admin access and ordinary registration | `--restart` checks account/password preservation |
+| `verify_cart_http.py` | Ownership, quantities, item cap, TTL, and checkout safety | `--outages` stops Redis temporarily |
+| `verify_cart_checkout_http.py` | Cart checkout, current SQL values, concurrent replay, and retained cart | `--outages` |
+| `verify_health_http.py` | Liveness and dependency reports | `--outages` stops each dependency in turn |
+| `verify_payment_simulation_http.py` | Simulator access, outcomes, and repeat-safe events | Use `--disabled` against the default API |
+| `verify_refund_http.py` | Refund validation, balances, and replay | `--development` for outcomes |
+| `verify_financial_reads_http.py` | Payment/refund details, ownership, and history pagination | `--development` for populated history |
+| `verify_shipment_http.py` | Paid-event shipment creation and owner reads | `--development` |
+| `verify_shipment_status_http.py` | Shipment transitions, tracking, and replay | `--development` |
+| `verify_fulfillment_http.py` | Shipment lists/history and private owner tracking | `--development` |
+| `verify_returns_http.py` | Return lifecycle, permissions, and settlement | `--development` |
+| `verify_rate_limit_http.py` | Independent quotas, 429, Retry-After, and recovery | Run last with default limits; waits about one minute |
+
+HTTP and browser checks leave fresh accounts/products/orders/payments in the local
+application database. Some checks reserve stock; startup does not refill it.
+[Demo maintenance](../tools/demo/README.md) can refresh retained product names.
+
+Default shipment/return checks use isolated SQL-seeded fixtures. Development mode
+exercises real paid events through RabbitMQ and simulated refund outcomes.
+Outage checks restore services in cleanup, but forced termination can prevent it;
+run them on a local test stack and inspect `docker compose ps -a` afterward.
+
+The default-admin check needs [setup enabled](admin.md#default-account).
+If its setup password was cleared, supply the login password privately through
+`ECOMMERCE_TEST_ADMIN_PASSWORD`. Checks do not print it.
+
+## Development payment simulator checks
+
+The default API has no payment/refund simulator routes. Check that first:
+
+```sh
+python3 tests/http/verify_payment_simulation_http.py --disabled
+```
+
+Enable the local simulator and test outcomes:
+
+```sh
+docker compose -f compose.yaml -f compose.development.yaml up -d --wait ecommerce
+python3 tests/http/verify_payment_simulation_http.py
+python3 tests/http/verify_refund_http.py --development
+python3 tests/http/verify_financial_reads_http.py --development
+```
+
+Other scripts with `--development` in the table can use the same overlay.
+Afterward, restore the default API with `docker compose up -d --wait ecommerce`.
+See [payments and refunds](payments.md) for the state rules.
+
+## Browser and telemetry checks
+
+Install packages first. With Compose running, use these commands from `src/storefront`:
+
+```sh
+npx playwright install chromium
+npm run test:e2e
+```
+
+With the Development overlay active, use `STOREFRONT_DEVELOPMENT=1 npm run test:e2e`.
+Failures retain screenshots; browser traces are disabled to avoid recording bearer headers.
+
+From the repository root:
+
+```sh
+npm --prefix src/storefront run test:observability
+```
+
+This check starts the dashboard, checks exported traces/metrics, tests a viewer
+outage, then restores the default API and removes the dashboard container. It
+retains application data and does not reset volumes. See [observability](observability.md).
 
 ## CI workflow and pass/fail results
 
-On pushes and pull requests, the [Ecommerce workflow](../.github/workflows/ecommerce.yml) runs this sequence:
+[GitHub Actions](../.github/workflows/ecommerce.yml) installs dependencies, builds,
+runs unit tests, starts Compose, and checks default HTTP/browser behavior.
+It also checks the telemetry viewer, Development outcomes, SQL/broker workflows,
+and final rate-limit recovery. Failure logs and browser screenshots help diagnosis.
+The CI-only cleanup removes its test volumes.
 
-1. Restore and build the solution, then run the xUnit tests with `dotnet test`.
-2. Generate a temporary SQL Server password, start the Compose stack, and run `--verify`.
-3. Check API health and wait for the seed products to appear in search.
-4. Run the HTTP script and `--verify-sqlserver`.
-5. Pause the API consumer, then run `--verify-rabbitmq` and `--verify-product-sync`.
-6. Restart the API and check health again.
-7. Show container logs on failure and always remove the CI stack and its volumes.
-
-In GitHub, open **Actions → Ecommerce → the run for your commit**. A successful run means its required checks completed successfully. A failed run identifies the step to inspect; an unfinished, skipped, or cancelled run is not a passing result. Locally, inspect each command's result and exit status—building successfully alone does not run every check.
-
-This workflow performs continuous integration (CI). It does not publish a container image or deploy an environment, so CD is not implemented. Passing checks provide evidence for the scenarios in the coverage table, not proof that every possible behavior is correct.
+Open **Actions → Ecommerce** to inspect a run. Failed, cancelled, unfinished, or
+skipped checks are not evidence of success. CI checks the recorded scenarios; it
+neither deploys the application nor proves every possible behavior correct.

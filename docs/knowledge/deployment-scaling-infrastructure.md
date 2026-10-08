@@ -2,9 +2,9 @@
 
 [Learning index](README.md) · [Documentation index](../README.md)
 
-Start with packaging and CI/CD, follow traffic from DNS to the application, then explore scaling, orchestration, storage, and safe rollouts. Code snippets are general examples unless they link to a repository file.
+Learn how code becomes a running service, how traffic reaches it, and what changes when the service needs more capacity or a safer rollout.
 
-> **In this project:** The [Dockerfile](../../Dockerfile) builds the API image; [Compose](../../compose.yaml) runs the local API and three dependencies. [GitHub Actions](../../.github/workflows/ecommerce.yml) performs CI checks, but there is no registry publish, CD deployment, Kubernetes cluster, load balancer, object storage, or production TLS configuration. The workers currently assume one API instance.
+**In this project:** The [Dockerfile](../../Dockerfile) builds the API and React/TypeScript storefront into one image. [Compose](../../compose.yaml) runs that image with SQL Server, RabbitMQ, Elasticsearch, and Redis. [GitHub Actions](../../.github/workflows/ecommerce.yml) runs CI checks. A telemetry viewer is optional. Production hosting, Kubernetes, object storage, a load balancer, and CD are learning topics, not configured infrastructure here.
 
 ## On this page
 
@@ -28,421 +28,236 @@ Start with packaging and CI/CD, follow traffic from DNS to the application, then
 
 ### Image
 
-An immutable application artifact.
+An image packages application files and their runtime environment. Build it once and promote the same artifact between environments. An image digest identifies exact content; a tag can point to different images over time.
 
 ### Container
 
-A running instance of an image.
+A container is a running instance of an image with its own process environment and filesystem view. Persist important data outside its disposable writable layer, such as in a database volume.
 
 ### Multi-stage Build
 
-Reduces final image size and keeps build tools out of production images.
+A multi-stage build compiles in build images and copies the output into a smaller runtime image. Build tools then need not remain in the final image.
 
-Core principle:
-
-```text
-Build once
-Deploy the same artifact everywhere
-```
+Here a Node stage builds the storefront, a .NET SDK stage publishes the API, and an ASP.NET runtime stage receives both outputs. The API serves the built browser files. See [Docker setup](../docker.md).
 
 ## CI/CD
 
-Typical pipeline:
+A common delivery pipeline is:
 
 ```text
-Git Push
-↓
-Build
-↓
-Test
-↓
-Docker Image
-↓
-Registry
-↓
-Deploy
+Push → build → checks → image → registry → deploy → verify rollout
 ```
 
-CI commonly includes:
+Continuous integration (CI) gives feedback on builds, tests, and other checks. Continuous delivery prepares verified artifacts for release; continuous deployment also automates release to an environment. Rollouts need health checks, a rollback path, and compatible database changes.
 
-- Build
-- Automated tests
-- Static analysis
-
-CD commonly includes:
-
-- Deployment
-- Rollout
-- Rollback
+This repository's workflow builds and tests against a local stack on the CI runner. It does not publish an image to a registry or deploy to a hosting environment.
 
 ## DNS
 
-DNS resolves:
+DNS maps names to records used to find services:
 
-```text
-Domain Name
-→ IP Address
-```
+| Record | Common purpose |
+| --- | --- |
+| A | IPv4 address |
+| AAAA | IPv6 address |
+| CNAME | Alias to another name |
+| MX | Mail server routing |
+| TXT | Text values such as domain verification |
 
-Common record types:
-
-- A
-- AAAA
-- CNAME
-- MX
-- TXT
-
-Important concept:
-
-**DNS TTL**
+DNS TTL tells resolvers how long a record may be cached. A DNS change may not reach every client immediately. DNS resolves a destination before the HTTP connection; it is not a request proxy.
 
 ## TLS and HTTPS
 
-TLS provides:
+TLS protects traffic confidentiality and integrity and lets a client authenticate the server through its certificate. In a simplified handshake, peers negotiate settings, validate the certificate, and establish keys for encrypted traffic.
 
-- Confidentiality
-- Integrity
-- Server authentication
+TLS may terminate at a proxy, load balancer, gateway, or CDN. Decide how the next connection to the backend is protected too. HTTPS at the edge does not automatically encrypt every internal hop.
 
-Simplified flow:
-
-```text
-TLS Handshake
-↓
-Certificate Validation
-↓
-Session Key
-↓
-Encrypted Traffic
-```
-
-A common architecture uses:
-
-**TLS Termination**
-
-at:
-
-- Load Balancer
-- Reverse Proxy
-- CDN
-- API Gateway
+The local Compose API uses loopback HTTP. The stack has no production certificate or TLS-termination configuration.
 
 ## HTTP/2 and HTTP/3
 
 ### HTTP/2
 
-Key feature:
-
-**Multiplexing**
-
-Multiple HTTP streams can share one TCP connection.
+HTTP/2 multiplexes several streams over one TCP connection. This reduces the need for separate connections, but lost TCP data can still hold up progress on other streams.
 
 ### HTTP/3
 
-Runs over:
+HTTP/3 uses QUIC over UDP. QUIC handles streams so loss on one does not impose TCP's connection-wide head-of-line blocking on independent streams. It still needs encryption, congestion control, and compatible client/server infrastructure.
 
-**QUIC / UDP**
-
-One advantage is reducing TCP-style Head-of-Line Blocking between independent streams.
+These protocols are learning topics, not a deployed edge configuration in this repository.
 
 ## Reverse Proxy, Load Balancer, and API Gateway
 
 ### Reverse Proxy
 
-```text
-Client
-↓
-Reverse Proxy
-↓
-Backend
-```
+A reverse proxy receives requests and forwards them to backend services. It can terminate TLS, route paths, and keep internal service addresses out of the client's view.
 
-It forwards requests and hides backend topology.
+```text
+Client → proxy → backend
+```
 
 ### Load Balancer
 
-Chooses one backend instance for each request.
-
-Common strategies:
-
-- Round Robin
-- Least Connections
-- Weighted Round Robin
-- IP Hash
+A load balancer distributes traffic across backend instances. Common strategies include round robin, least connections, weighted routing, and IP hash. Health signals help it avoid instances that should not receive new traffic.
 
 ### API Gateway
 
-A unified API entry point.
+An API gateway is a shared entry point for routing and API policies. It may apply authentication, rate limits, logging, transformations, or version routing. Keep core business rules in the application so they are enforced wherever the operation runs.
 
-Possible responsibilities:
-
-- Routing
-- Authentication
-- Rate limiting
-- Request/response transformation
-- Logging
-- API policies
-- Versioning
-
-Avoid putting heavy business logic in the gateway.
+One product can perform several of these roles. None is deployed in the local stack.
 
 ## Scaling
 
 ### Vertical Scaling
 
-Increase resources on one machine:
-
-- CPU
-- RAM
-- Disk
+Give one machine more CPU, memory, or storage. This is often simple, but has hardware and cost limits and does not by itself add redundancy.
 
 ### Horizontal Scaling
 
-Add more instances:
+Add instances and distribute work among them. This needs shared state, safe concurrent writes, and coordination for work that must happen once.
 
-```text
-API A
-API B
-API C
-```
+Adding API replicas will not fix a database or broker bottleneck automatically. Measure request latency, resource usage, and backlog first.
 
 ### Stateless API
 
-Application instances should avoid owning permanent request/session state locally.
+Keep durable data and shared session state outside a single API process, using a database, Redis, or object storage as appropriate. Any instance should be able to handle a request with the provided identity and shared state.
 
-Shared state should usually live in:
-
-- Database
-- Redis
-- Object Storage
+This app uses shared SQL and Redis data, but its Outbox publication has no multi-instance row-claiming protocol. Startup migrations and workers also need a deployment plan before using several API replicas. The current local stack runs one API instance.
 
 ## Rate Limiting
 
-Common algorithms:
+A rate limiter controls admitted work to reduce abuse and protect capacity:
 
-- Fixed Window
-- Sliding Window
-- Token Bucket
-- Leaky Bucket
+| Algorithm | Idea |
+| --- | --- |
+| Fixed window | Allow a set number of requests in each period |
+| Sliding window | Measure over a moving recent period |
+| Token bucket | Refill tokens over time; allow a bounded burst |
+| Leaky bucket | Drain admitted work at a controlled pace |
 
-Uses:
+The project uses fixed windows in [CommerceRateLimiting](../../src/Ecommerce.Api/Common/RateLimiting/CommerceRateLimiting.cs). Catalog reads share a per-IP quota. Order creation, cart checkout, and return requests share one customer quota. Payment creation, customer refunds, and Development simulators share another. Rejections return `429` with `Retry-After`. See [rate limiting](../rate-limiting.md).
 
-- Prevent abuse
-- Protect downstream systems
-- Control resource usage
-- Reduce brute-force attacks
+Counters are local to each API process. Several replicas would multiply the available quota unless the policy were coordinated. Behind a proxy, define trusted forwarded-header handling before relying on client IP; the current app uses the connection's remote IP.
 
 ## Kubernetes Fundamentals
 
-Important concepts:
+Kubernetes manages containers and their desired running state. The main concepts are:
 
-- Pod
-- Deployment
-- Service
-- Ingress
-- ConfigMap
-- Secret
-- HPA
+| Concept | Purpose |
+| --- | --- |
+| Pod | Smallest deployable group of containers |
+| Deployment | Maintains replicas and manages replacement |
+| Service | Stable networking to selected Pods |
+| Ingress | Rules for external HTTP routing through an ingress controller |
+| ConfigMap | Non-secret configuration |
+| Secret | Secret distribution, with access and encryption controls still required |
+| HPA | Horizontal Pod Autoscaler |
 
 ### Deployment
 
-Declares:
-
-```text
-I want N replicas
-```
-
-Kubernetes tries to maintain that desired state.
+A Deployment declares the desired replicas and container template. Kubernetes works to keep that state as instances stop or versions change. It does not make unsafe application concurrency safe.
 
 ### Service
 
-Provides stable networking to a set of Pods.
+A Service gives clients a stable way to reach a changing set of Pods. It selects matching instances instead of asking callers to track each Pod address.
 
 ### HPA
 
-Horizontal Pod Autoscaler can scale based on:
+An HPA adjusts replica count using metrics such as CPU, memory, or a custom measure. Choose a signal tied to the bottleneck and set useful bounds. Scaling API replicas cannot add database capacity by itself.
 
-- CPU
-- Memory
-- Custom metrics
+Kubernetes and autoscaling are not installed here.
 
 ## Kubernetes Ingress and Service Mesh
 
 ### Ingress
 
-Common responsibilities:
-
-- Host routing
-- Path routing
-- TLS
-- Reverse proxying
-- Load balancing
+An ingress controller implements host/path routing and commonly handles TLS and proxying. Ingress rules alone need a controller to carry them out.
 
 ### Service Mesh
 
-Focused on service-to-service traffic:
+A service mesh manages service-to-service traffic. It can provide mutual TLS, traffic policies, retries, circuit breaking, and tracing. These features add configuration and operational cost, and retries still need safe application semantics.
 
-- mTLS
-- Retry
-- Circuit Breaker
-- Tracing
-- Traffic control
-
-Common terms:
-
-- **North-South Traffic** — Client ↔ System
-- **East-West Traffic** — Service ↔ Service
+North-south traffic crosses the system boundary, such as client to API. East-west traffic flows between services. This project has neither an ingress controller nor a mesh.
 
 ## Object Storage
 
-Common services:
+Object stores such as Amazon S3, Azure Blob Storage, Google Cloud Storage, and MinIO hold binary data under keys. A database can store the file's metadata and ownership while the object store keeps the bytes.
 
-- Amazon S3
-- Azure Blob Storage
-- Google Cloud Storage
-- MinIO
-
-Do not assume large files should live on local API server disks.
-
-Typical architecture:
-
-```text
-Database
-→ Metadata
-
-Object Storage
-→ Binary data
-```
+Local API disk can be unsuitable for shared or durable files: another replica may not have the same file, and a replacement container may lose it. Choose storage based on durability, access, and sharing needs.
 
 ### Pre-signed URL / SAS
 
-Direct client upload:
+A signed URL grants limited access to one storage operation for a defined time:
 
 ```text
-Client
-↓
-Ask API for permission
-↓
-Receive signed URL
-↓
-Client uploads directly to Object Storage
+Client asks API → API checks permission → API issues signed upload URL
+Client uploads directly to object storage
 ```
 
-This offloads file traffic from the API server.
+This avoids routing all file bytes through the API. Validate the completed upload before treating it as trusted application data.
 
 ### Multipart Upload
 
-Split large files into parts.
+Multipart upload divides a large file into parts, which can be retried separately before the final object is assembled.
 
 ### Resumable Upload
 
-Continue after interruption instead of restarting from zero.
+A resumable upload continues from saved progress after interruption. It avoids restarting a large transfer from zero.
 
 ### File Security
 
-Important controls:
+Check size, allowed types, and file signatures rather than trusting a filename or MIME header. Use server-chosen storage keys, scan where needed, and quarantine files until checks finish. Enforce ownership on upload and download access.
 
-- File size limits
-- MIME validation
-- Magic byte / signature validation
-- Malware scanning
-- Quarantine
-- Server-generated storage keys
+Object storage and file-upload APIs are learning topics; this app does not implement them.
 
 ## CDN
 
-A CDN caches content near users at edge locations.
+A content delivery network caches content at edge locations near users. The origin supplies it on a miss; a hit can avoid contacting the origin.
 
-Important concepts:
+Images, videos, scripts, styles, and downloads are common uses. Some public API responses can also be cached with a clear key and expiry policy. Personalized or authorized content needs an explicit access/cache policy.
 
-- Edge
-- Origin
-- Cache Hit
-- Cache Miss
-
-Good use cases:
-
-- Images
-- Video
-- JavaScript / CSS
-- Downloads
-- Some API responses
-
-CDNs may also provide:
-
-- TLS
-- DDoS protection
-- WAF
-- Rate limiting
+CDNs may also offer TLS, DDoS controls, a WAF, or rate limiting. A CDN is not configured here.
 
 ## Feature Flags
 
-Feature Flags separate:
+A feature flag lets code be deployed before its behavior is enabled. It can support a gradual release, internal preview, experiment, or emergency disable switch.
 
-```text
-Code Deployment
-≠
-Feature Release
-```
+Define who changes a flag and what happens when its source is unavailable. Remove flags and obsolete paths after a rollout so old combinations do not accumulate.
 
-Uses:
-
-- Gradual rollout
-- Kill switch
-- A/B testing
-- Internal preview
-
-Remove old flags after rollout.
-
-Otherwise they become:
-
-**Stale Feature Flags**
+This app has configuration switches, such as Development-only payment simulation and optional telemetry export. It does not have a general feature-flag service.
 
 ## Zero-Downtime Deployment
 
 ### Rolling Deployment
 
-Replace old instances gradually.
+Replace instances gradually while others serve traffic. Old and new code must both understand the shared data and contracts during overlap.
 
 ### Blue-Green Deployment
 
-```text
-Blue = current version
-Green = new version
-```
-
-Validate Green, then switch traffic.
+Run the current and new versions separately, validate the new environment, then switch traffic. Keep a rollback plan; shared schema changes can still prevent rollback.
 
 ### Canary Deployment
 
-Example:
-
-```text
-5%
-20%
-50%
-100%
-```
-
-Gradually increase traffic to the new version.
+Send a small portion of traffic to the new version, observe it, and increase the portion if results are acceptable. Decide the success and rollback signals before starting.
 
 ### Graceful Shutdown
 
 ```text
-Stop receiving new traffic
-↓
-Finish in-flight work
-↓
-Close resources
-↓
-Exit
+Stop accepting new traffic → finish or safely abandon in-flight work
+→ release resources → exit
 ```
+
+Pass stopping tokens to supported operations, set a bounded drain period, and preserve unfinished work for recovery. Idempotency covers cases where a client or worker cannot tell whether the last attempt finished.
+
+These are deployment strategies to study. The repository does not implement a production zero-downtime rollout.
 
 ## Project examples
 
-[Program.cs](../../Program.cs) reads configuration and starts SQL Server migrations. [compose.yaml](../../compose.yaml) supplies local connection settings through environment variables; the password belongs in an ignored `.env`, not source control. [Dockerfile](../../Dockerfile) builds the API image in one stage and runs it with the ASP.NET runtime image in another. Compose starts the API, SQL Server, RabbitMQ, and Elasticsearch together. It is a local stack, not a production deployment.
+[Program.cs](../../src/Ecommerce.Api/Program.cs) reads configuration, runs migrations, registers workers, and serves static storefront files. [compose.yaml](../../compose.yaml) provides service addresses and local environment settings. Keep local passwords in ignored configuration; follow the [Docker guide](../docker.md) for startup and reset behavior.
 
-The GitHub Actions workflow is **CI**: it restores, builds, starts services, checks health/search, runs the custom scenarios and HTTP script, then removes the test stack. It does **not** publish an image to a registry or deploy the app, so this project does not have CD yet.
+The default stack has five services: the API/storefront, SQL Server, RabbitMQ, Elasticsearch, and Redis. The optional [observability overlay](../observability.md) adds a dashboard and OTLP export. It is not a health dependency or a production monitoring service.
+
+The CI workflow builds backend and frontend code, runs unit, SQL, HTTP, browser, broker, and telemetry checks, and cleans up its test stack. See [verification](../verification.md) for commands and scope. This is CI; registry publication and deployed release automation still need to be designed.
 
 ---
 

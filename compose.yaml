@@ -3,8 +3,12 @@ services:
     build: .
     environment:
       ConnectionStrings__ShopDatabase: "Server=sqlserver;Database=Ecommerce;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env};Encrypt=True;TrustServerCertificate=True"
+      DefaultAdmin__Enabled: ${DEFAULT_ADMIN_ENABLED:-false}
+      DefaultAdmin__Email: ${DEFAULT_ADMIN_EMAIL:-}
+      DefaultAdmin__Password: ${DEFAULT_ADMIN_PASSWORD:-}
       Elasticsearch__Url: http://elasticsearch:9200
       RabbitMq__HostName: rabbitmq
+      Redis__ConnectionString: "redis:6379,abortConnect=false"
     depends_on:
       sqlserver:
         condition: service_healthy
@@ -67,6 +71,16 @@ services:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 12

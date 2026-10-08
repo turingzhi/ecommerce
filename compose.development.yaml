@@ -1,0 +1,5 @@
+# Opt-in local development tools; base compose.yaml retains its default environment.
+services:
+  ecommerce:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development

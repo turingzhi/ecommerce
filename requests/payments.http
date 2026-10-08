@@ -1,0 +1,22 @@
+@baseUrl = http://127.0.0.1:5088
+@accessToken = PASTE_ACCESS_TOKEN_HERE
+@orderId = PASTE_ORDER_ID_HERE
+
+### Create a payment attempt; use a new key only for a new attempt
+POST {{baseUrl}}/orders/{{orderId}}/payments
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: payment-001
+
+
+@paymentId = PASTE_PAYMENT_ID_HERE
+
+### Development only: resolve your payment; outcome can be success, failure, or timeout
+POST {{baseUrl}}/dev/payments/{{paymentId}}/simulate
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{ "outcome": "success" }
+
+### Read your payment's current status
+GET {{baseUrl}}/payments/{{paymentId}}
+Authorization: Bearer {{accessToken}}

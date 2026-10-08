@@ -1,0 +1,24 @@
+@baseUrl = http://127.0.0.1:5088
+@readerToken = REPLACE_WITH_FRESH_OPERATOR_TOKEN
+@orderId = 00000000-0000-0000-0000-000000000000
+@paymentId = 00000000-0000-0000-0000-000000000000
+
+### Cross-customer orders (orders:read)
+GET {{baseUrl}}/admin/orders?status=PendingPayment&page=1&pageSize=20
+Authorization: Bearer {{readerToken}}
+
+### Order details, including saved purchase items (orders:read)
+GET {{baseUrl}}/admin/orders/{{orderId}}
+Authorization: Bearer {{readerToken}}
+
+### Cross-customer payment attempts (payments:read)
+GET {{baseUrl}}/admin/payments?status=Pending&page=1&pageSize=20
+Authorization: Bearer {{readerToken}}
+
+### Payment attempts for one order (payments:read)
+GET {{baseUrl}}/admin/payments?orderId={{orderId}}&page=1&pageSize=20
+Authorization: Bearer {{readerToken}}
+
+### One payment (payments:read)
+GET {{baseUrl}}/admin/payments/{{paymentId}}
+Authorization: Bearer {{readerToken}}

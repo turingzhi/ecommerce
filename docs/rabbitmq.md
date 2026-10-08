@@ -2,35 +2,59 @@
 
 [Documentation index](README.md) · [Project overview](../README.md)
 
-The SQL Outbox and RabbitMQ cover different stages of event delivery. The [workflow diagrams](workflows.md#outbox-rabbitmq-retries-and-product-search) show both stages; [verification](verification.md) has the commands for checking them locally.
+The SQL Outbox keeps events until publication succeeds. RabbitMQ delivers them to the consumer. Together they provide at-least-once delivery: an event can arrive more than once, so consumers must tolerate replay.
 
 ## SQL Outbox to broker
 
-The Outbox worker reads unpublished SQL records and passes them to `RabbitMqEventPublisher`. The publisher declares a durable direct exchange and durable queues, sends a persistent JSON event with the stable Outbox ID, and waits for a publisher confirmation. Mandatory routing makes an unbound routing key fail. Only after confirmation does the dispatcher set `PublishedAt` on the SQL row.
+The Outbox worker polls every five seconds and reads up to 100 eligible unpublished rows, ordered by ID. `RabbitMqEventPublisher` declares the topology, publishes persistent JSON with the stable Outbox ID, and waits for confirmation. Mandatory routing rejects an unbound routing key. Only then does the dispatcher set SQL `PublishedAt`.
 
-If RabbitMQ is unavailable, the SQL event stays pending and the Outbox worker retries with backoff. Transport failures do not permanently dead-letter it, even after more than five attempts. They still increase the Outbox attempt count; once that count is at least five, a later non-transport publication failure can dead-letter the SQL row. A confirmation can be received just before the application crashes, leaving the SQL row unpublished; this can cause another publication of the same event.
+A crash after confirmation but before saving `PublishedAt` can publish the event again. Publication failures increment `AttemptCount`, save the error, end that batch, and set `NextAttemptAt` using `min(300, 2^AttemptCount)` seconds of backoff.
+
+| Failure | SQL Outbox policy |
+| --- | --- |
+| `BrokerDeliveryUnavailableException` | Keep retrying, including beyond five attempts |
+| Other publication failure | Dead-letter the SQL row once total `AttemptCount` reaches five |
+
+Unavailable attempts remain in the total, so a later non-transport failure can dead-letter immediately. The publisher preserves `PublishException` and requested cancellation; it wraps other failures as delivery unavailable. This classification is broad: repeated retries can still need operator investigation.
+
+Sources: [OutboxDispatcher](../src/Ecommerce.Api/Infrastructure/Messaging/Outbox/OutboxDispatcher.cs), [OutboxWorker](../src/Ecommerce.Api/Infrastructure/Messaging/Outbox/OutboxWorker.cs), and [RabbitMqEventPublisher](../src/Ecommerce.Api/Infrastructure/Messaging/RabbitMq/RabbitMqEventPublisher.cs).
 
 ## Broker to consumer
 
-`RabbitMqConsumerWorker` receives one main-queue delivery at a time and calls `EventConsumer`. On success, the consumer saves the event ID in `ProcessedMessages` before the worker acknowledges RabbitMQ. If an acknowledgement is lost, RabbitMQ can redeliver; the saved ID prevents repeated work. This is at-least-once delivery.
+The worker receives one main-queue delivery at a time with manual acknowledgements. `EventConsumer` skips saved event IDs. It handles `ProductUpserted` through Elasticsearch and Redis, and `OrderPaid` through shipment creation; other events only receive a processed marker. Successful processing saves the SQL marker before acknowledgement.
 
-On a processing failure, the worker publishes the original body to a durable retry queue with a confirmed publish, then acknowledges the original delivery. The retry queue has a two-second TTL and routes expired messages back to the main exchange. The consumer reads from the main queue, so it receives the event again when the retry queue sends it back. Non-transient processing failures reach a separate RabbitMQ dead-letter queue on the fifth failed processing attempt. Temporary database and Elasticsearch outages stay retryable without consuming that limit. If moving a delivery to the retry or dead-letter queue fails, the worker requeues the original delivery.
+On failure, the worker confirms a replacement publication to the retry or dead queue before acknowledging the original. If that move fails, it requeues the original. The retry queue expires messages after 2,000 ms and routes them back to the main queue.
 
-For `ProductUpserted`, the consumer indexes Elasticsearch before saving the processed ID. Other event types currently receive a processed marker but have no fulfillment or email handler. The [product synchronization guide](product-sync.md) explains versioned indexing.
-
-The RabbitMQ verification runner checks confirmed publication, duplicate delivery, unroutable routing, broker outage and recovery, temporary consumer database failure, and a poison event reaching the RabbitMQ dead-letter queue. It uses a temporary SQL Server database with the real local broker; see [verification setup](verification.md#sql-server-and-infrastructure-checks).
-
-## Failure classification and retry timing
-
-The workers classify exceptions; they do not independently know whether a dependency has recovered. A later operation succeeding is how recovery becomes visible.
-
-| Stage | Policy in the current code |
+| Processing failure | Consumer policy |
 | --- | --- |
-| SQL publication | `OutboxWorker` polls every five seconds. After a failure, the dispatcher increments `AttemptCount` and sets a delay of `min(300, 2^AttemptCount)` seconds. A row is eligible only after `NextAttemptAt`. A failed row ends the current batch. |
-| SQL dead-letter flag | `BrokerDeliveryUnavailableException` keeps the row retryable. Any other failure dead-letters it when the accumulated count is at least five. Earlier unavailable attempts remain in that count. |
-| RabbitMQ consumer | The retry queue has a 2,000 ms TTL and dead-letters expired messages back to the main exchange. Actual processing may take longer because of queues and scheduling. |
-| RabbitMQ dead-letter queue | Counted failures increase `x-attempts`; the fifth goes to the dead queue. `ProductSearchUnavailableException` and database exceptions bypass this increment. |
+| `ProductSearchUnavailableException`, or a `DbException`/`DbUpdateException` anywhere in the exception chain | Retry without increasing `x-attempts` |
+| Other failure | Increase `x-attempts`; the fifth counted failure goes to the dead queue |
 
-These classifications are deliberately broad in the current implementation. The publisher wraps exceptions other than `PublishException` and requested cancellation as delivery-unavailable. The consumer treats any `DbException` or `DbUpdateException` in the exception chain as an infrastructure failure, including failures that might need a code or data fix. Consequently, unlimited retry does not prove that a failure is temporary. Inspect repeated errors rather than assuming every retry loop will recover automatically.
+Redis generation failures use the counted policy. The database classification also includes errors that may need a data or code fix; unlimited retry does not prove an outage is temporary. The worker reconnects five seconds after a disconnected session.
 
-The code is in [OutboxDispatcher](../Services/OutboxDispatcher.cs), [RabbitMqEventPublisher](../Services/RabbitMqEventPublisher.cs), and [RabbitMqConsumerWorker](../Services/RabbitMqConsumerWorker.cs). For inspection commands and what remains manual, see [operations](operations.md#inspect-event-delivery).
+For products, indexing and cache invalidation precede the marker; versioned writes tolerate repetition. For paid orders, shipment, initial history, and marker commit together under an order-row lock. See [product synchronization](product-sync.md), [fulfillment](fulfillment.md), and [consumer code](../src/Ecommerce.Api/Infrastructure/Messaging/RabbitMq/RabbitMqConsumerWorker.cs).
+
+## Local topology
+
+All exchanges are durable direct exchanges; all queues are durable. Every binding uses `commerce.event`.
+
+| Exchange | Queue |
+| --- | --- |
+| `ecommerce.events` | `ecommerce.events.consumer` |
+| `ecommerce.events.retry` | `ecommerce.events.retry.consumer` |
+| `ecommerce.events.dead` | `ecommerce.events.dead.consumer` |
+
+Defaults are host `localhost`, port `5672`, and user/password `guest`; Compose sets the host to `rabbitmq`. Configuration uses the `RabbitMq` section. The retry queue has a two-second TTL and a dead-letter binding back to the main exchange. See [RabbitMqTopology](../src/Ecommerce.Api/Infrastructure/Messaging/RabbitMq/RabbitMqTopology.cs) and [RabbitMqOptions](../src/Ecommerce.Api/Infrastructure/Messaging/RabbitMq/RabbitMqOptions.cs).
+
+Inspect queue counts locally:
+
+```sh
+docker compose exec rabbitmq rabbitmqctl list_queues name messages_ready messages_unacknowledged
+docker compose logs --since=5m ecommerce
+```
+
+The management UI is at [localhost:15672](http://127.0.0.1:15672). SQL dead-letter rows and RabbitMQ dead-queue messages require separate inspection and manual recovery; see [Docker operations](docker.md).
+
+## Verification
+
+`--verify-rabbitmq` exercises confirmed publication, duplicates, unroutable routing, outages/recovery, poison messages, shipment replay, and broker trace correlation against real local infrastructure. It uses a disposable SQL database. Pause the API consumer before running it so the API does not take the verifier's messages. See [verification](verification.md) for setup and commands.

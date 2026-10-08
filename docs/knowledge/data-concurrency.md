@@ -2,9 +2,13 @@
 
 [Learning index](README.md) · [Documentation index](../README.md)
 
-Follow data from EF Core queries to SQL indexes, transactions, concurrent writes, and schema changes. Replicas, sharding, and distributed locks extend the discussion to larger systems. Code snippets are general examples unless they link to a repository file.
+Learn how EF Core reads and writes data, then how SQL Server protects those writes when requests overlap. Replicas, sharding, and distributed locks are later topics. Snippets are teaching examples unless linked to source code.
 
-> **In this project:** The app uses EF Core with SQL Server, explicit transactions, unique indexes, SQL Server lock hints, and conditional stock updates. It does not use read replicas, sharding, or Redis locks. Disposable SQL Server verification databases explicitly disable connection pooling. See [ShopDb](../../Data/ShopDb.cs), [OrderService](../../Services/OrderService.cs), and the [SQL lock diagram](../workflows.md#two-requests-with-the-same-idempotency-key).
+**In this project:** EF Core uses SQL Server. Transactions, unique indexes, lock hints, and conditional updates protect checkout and other workflows. Read replicas, sharding, and Redis locks are learning topics; they are not configured here.
+
+These protections do not cover every edge case. The [architecture review](../architecture-review.md)
+documents amount overflow, inconsistent stock lock ordering, and query/pagination
+issues. Its examples are proposed fixes, not current implementation.
 
 ## On this page
 
@@ -25,499 +29,302 @@ Follow data from EF Core queries to SQL indexes, transactions, concurrent writes
 
 ### DbContext
 
-`DbContext` is responsible for:
+A `DbContext` builds queries, tracks loaded entities, saves changes, and works with transactions. It is a short-lived unit of database work, not a thread-safe shared store.
 
-- Change Tracking
-- Querying
-- `SaveChanges`
-- Transaction integration
-
-Example:
+`AddDbContext` normally registers it as scoped. A request gets its own context,
+while collaborating services in that scope can share it sequentially. Scope
+disposal cleans up the context; connection pooling separately reuses physical
+SQL connections. See [DbContext versus Redis](csharp-fundamentals.md#dbcontext-versus-redis)
+for the lifetime comparison and [disposal](csharp-fundamentals.md#disposal-versus-garbage-collection)
+for ownership and memory cleanup.
 
 ```csharp
-var user = await db.Users
-    .FirstOrDefaultAsync(x => x.Id == id);
-
-await db.SaveChangesAsync();
+var order = await db.Orders.SingleOrDefaultAsync(o => o.Id == orderId);
+if (order is not null)
+{
+    order.Status = "Cancelled";
+    await db.SaveChangesAsync();
+}
 ```
+
+This shows tracked persistence only. Real cancellation also checks ownership and payment state and restores stock; see [OrderService.Cancel](../../src/Ecommerce.Api/Features/Orders/Services/OrderService.cs).
 
 ### IQueryable
 
-`IQueryable` represents a query that has not necessarily executed yet.
+An `IQueryable<T>` describes a query. Building it does not normally fetch the rows:
 
 ```csharp
-var query = db.Users
-    .Where(x => x.IsActive);
-
-var result = await query.ToListAsync();
+var query = db.Orders.Where(o => o.CustomerId == customerId);
+var orders = await query.ToListAsync(); // Execute and load the results.
 ```
 
-Execution usually happens at:
-
-```text
-ToListAsync
-FirstAsync
-CountAsync
-SingleAsync
-```
+Operations such as `ToListAsync`, `FirstAsync`, `CountAsync`, and `SingleAsync` execute a query. Once results are in a list, further LINQ runs over those in-memory objects. Filter before loading when possible.
 
 ### Projection
 
-Avoid loading more data than necessary.
-
-Instead of:
+Projection selects only the data a caller needs:
 
 ```csharp
-await db.Users.ToListAsync();
-```
-
-Use projection:
-
-```csharp
-await db.Users
-    .Select(x => new UserDto
-    {
-        Id = x.Id,
-        Name = x.Name
-    })
+var summaries = await db.Orders
+    .Where(o => o.CustomerId == customerId)
+    .Select(o => new { o.Id, o.Status, o.CreatedAt })
     .ToListAsync();
 ```
 
-Benefits:
-
-- Less network traffic
-- Less memory usage
-- Less database I/O
+Compared with loading complete entities and related data, this can reduce network traffic, memory use, and database work.
 
 ### AsNoTracking
 
-For read-only queries:
-
-```csharp
-db.Users.AsNoTracking()
-```
-
-This reduces Change Tracking overhead.
+Use `AsNoTracking()` when you do not plan to edit loaded entities. EF Core then skips normal change tracking for those results. This reduces overhead; it does not change transaction isolation or lock behavior.
 
 ### N+1 Problem
 
-Example:
+An N+1 query pattern loads a list, then sends another query for each item. Loading 100 orders followed by 100 separate customer lookups means 101 queries.
 
-```text
-Load 100 Orders
-↓
-Load one User for each Order
-↓
-1 + 100 queries
-```
-
-Common solutions:
-
-- `Include`
-- `JOIN`
-- Projection
-- Batch queries
+Use a suitable `Include`, join, projection, or batch query. Choose based on the required data and inspect the resulting SQL; one large join can also return more data than needed.
 
 ### Tracked changes versus immediate updates
 
-Changing a tracked entity property is saved by `SaveChangesAsync`. `ExecuteUpdateAsync` sends an update immediately and does not refresh already tracked objects or automatically apply their concurrency tokens. Several such updates and a later save need an explicit transaction when they must commit together. Check the affected-row count to detect a failed condition. See [EF Core bulk updates](https://learn.microsoft.com/en-us/ef/core/saving/execute-insert-update-delete).
+Changing a tracked property waits for `SaveChangesAsync`. `ExecuteUpdateAsync` sends SQL immediately. It does not refresh already tracked objects or automatically apply their concurrency tokens. Several immediate updates and a later save need an explicit transaction if they must commit together. See [EF Core bulk updates](https://learn.microsoft.com/en-us/ef/core/saving/execute-insert-update-delete).
 
-In [OrderService](../../Services/OrderService.cs), stock is reduced with a conditional `ExecuteUpdateAsync`; zero affected rows means checkout cannot continue. The surrounding transaction keeps those immediate stock updates atomic with the later order and Outbox save.
+Checkout uses this pattern in [OrderService](../../src/Ecommerce.Api/Features/Orders/Services/OrderService.cs):
+
+```csharp
+var affected = await db.Products
+    .Where(p => p.Id == item.ProductId && p.Available >= item.Quantity)
+    .ExecuteUpdateAsync(update => update.SetProperty(
+        p => p.Available, p => p.Available - item.Quantity));
+```
+
+Zero affected rows means the condition failed. The surrounding transaction groups these stock changes with the order and Outbox save.
 
 ## Database Indexes
 
-Indexes can improve queries whose filters, joins, or ordering match the index. Measure the execution plan and reads; an unused index still adds write and storage cost.
-
-Example:
+An index helps SQL find or order matching rows without scanning all data. It may support a filter, join, or sort, but SQL chooses whether to use it.
 
 ```sql
-CREATE INDEX IX_Users_Email
-ON Users(Email);
+CREATE INDEX IX_Users_Email ON Users(Email);
 ```
 
-Useful for:
-
-- `WHERE`
-- `JOIN`
-- `ORDER BY`
-- Frequently queried columns
-
-Trade-offs:
-
-- Slower writes
-- Extra disk usage
-- Maintenance cost
+This is an illustrative index. Every index costs storage and write work. Use execution plans and measurements to decide which indexes help.
 
 ### Composite Index
 
-Example:
-
-```text
-INDEX(UserId, CreatedAt)
-```
-
-Column order matters.
+A composite index uses several columns. Their order matters. An index beginning with `(CustomerId, CreatedAt)` can support one customer's time-ordered list, but may not help a query filtering only by `CreatedAt` in the same way.
 
 ### Covering Index
 
-If an index contains all columns required by a query, the database may avoid looking up the base table.
+An index covers a query when it contains all required columns. SQL may then avoid looking up rows in the base table. This project's order-list index includes `Status` and `Currency`; see the [local measurement](../sqlserver-order-list-performance.md).
 
 ## Transactions and ACID
 
 ### ACID
 
-- **Atomicity** — all operations succeed or all fail
-- **Consistency** — database constraints remain valid
-- **Isolation** — concurrent transactions are isolated from each other
-- **Durability** — committed data survives failures
+| Property | Meaning |
+| --- | --- |
+| Atomicity | A transaction commits all its changes or none of them |
+| Consistency | Valid database rules remain valid when changes commit |
+| Isolation | Concurrent transactions interact under defined rules |
+| Durability | Committed changes are retained according to the database's storage guarantees |
+
+Transactions do not invent business rules. Define them with checks, constraints, and the right update operations.
 
 ### Transaction
 
+A single `SaveChangesAsync` normally saves its changes transactionally. Use an explicit transaction for multiple saves or immediate updates that belong together:
+
 ```csharp
-await using var tx =
-    await db.Database.BeginTransactionAsync();
-
-try
-{
-    // operations
-
-    await db.SaveChangesAsync();
-    await tx.CommitAsync();
-}
-catch
-{
-    await tx.RollbackAsync();
-    throw;
-}
+await using var transaction = await db.Database.BeginTransactionAsync();
+// Perform related database operations.
+await db.SaveChangesAsync();
+await transaction.CommitAsync();
 ```
 
-A single `SaveChangesAsync()` normally executes its own database changes transactionally.
-
-If multiple saves must succeed or fail together, use an explicit transaction.
+If an exception or early return leaves this transaction uncommitted, disposal rolls it back. A local SQL transaction cannot also atomically publish to RabbitMQ; that is why the project uses an Outbox.
 
 ### Isolation levels
 
-A transaction groups changes; its isolation level determines what concurrent transactions can observe. SQL Server offers these choices:
+The isolation level defines what concurrent transactions may observe:
 
-| Level | Main read guarantee or trade-off |
+| Level | Read behavior |
 | --- | --- |
-| Read uncommitted | May read changes that later roll back |
-| Read committed | Avoids dirty reads; repeated statements can see different committed data |
-| Repeatable read | Protects rows read until transaction end; matching new rows can still appear |
-| Serializable | Also protects qualifying key ranges against new matching rows |
+| Read uncommitted | May see data that later rolls back |
+| Read committed | Avoids dirty reads; repeated statements may see different committed data |
+| Repeatable read | Protects rows already read; new matching rows may still appear |
+| Serializable | Also protects qualifying key ranges from new matching rows |
 | Snapshot | Reads a transaction-consistent version; conflicting writes may fail |
 
-Read committed can use locks or row versions depending on database configuration. Stronger isolation can add blocking or versioning costs. See [SQL Server isolation levels](https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql).
+Read committed can use locks or row versions depending on database settings. Stronger isolation may add blocking or version-storage costs. See [SQL Server isolation levels](https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql).
 
-This project's same-key lookup uses explicit `UPDLOCK` and `HOLDLOCK` hints. Merely adding `BeginTransactionAsync` would not provide that same lookup protection. See the [concurrent checkout diagram](../workflows.md#two-requests-with-the-same-idempotency-key).
+The same-key checkout lookup adds `UPDLOCK` and `HOLDLOCK` explicitly. Starting a transaction alone does not provide that lookup protection. See the [checkout lock diagram](../workflows.md#two-requests-with-the-same-idempotency-key).
 
 ## Concurrency Control
 
 ### Race Condition
 
-A race condition happens when multiple concurrent operations compete over shared state.
+A race occurs when overlapping operations produce a result that depends on their timing. Two customers can both read that one unit remains before either writes. A C# stock check alone cannot prevent that race.
 
 ### Lost Update
 
-Example:
-
 ```text
-A reads balance = 100
-B reads balance = 100
-
-A writes 90
-B writes 80
+A and B both read balance = 100
+A subtracts 10 and writes 90
+B subtracts 20 and writes 80
 ```
 
-A's update is lost.
+The final balance should be 70, but B overwrote A's change. This is a lost update.
 
 ### Optimistic Concurrency
 
-Assumes conflicts are uncommon.
+Optimistic concurrency checks whether a row changed since it was read. A `rowversion`, version column, or other concurrency token is included in the update condition. If it no longer matches, the caller must reject, reload, or retry appropriately.
 
-Common techniques:
-
-- `rowversion`
-- Version column
-- Concurrency token
-
-The update checks whether the version is still unchanged.
+The project's `Product.Version` is a concurrency token. Product events also carry that version so search can reject older snapshots. Other entities do not automatically share this protection.
 
 ### Pessimistic Locking
 
-Locks data before changing it.
-
-Good for high-contention scenarios, but may cause:
-
-- Blocking
-- Deadlocks
-- Reduced throughput
+Pessimistic locking protects data before changing it. It can be useful for operations likely to conflict, but waiting transactions reduce throughput and may deadlock. Keep the transaction short and lock only what the operation needs.
 
 ### Atomic SQL Operation
 
-Prefer atomic database operations when possible:
+Put the check and change in one database operation:
 
 ```sql
 UPDATE Inventory
 SET Quantity = Quantity - 1
-WHERE Id = 1
-AND Quantity > 0;
+WHERE Id = 1 AND Quantity > 0;
 ```
 
-This is safer than:
-
-```text
-SELECT
-↓
-application logic
-↓
-UPDATE
-```
+The affected-row count tells you whether the update succeeded. This avoids the gap between reading, checking in C#, and later writing. Checkout uses the same idea for the requested quantity.
 
 ### Deadlock
 
-Two transactions wait for resources held by each other.
+A deadlock occurs when transactions wait for resources held by each other. SQL Server chooses a victim so the other transaction can continue.
 
-Common mitigation:
-
-- Consistent resource access order
-- Short transactions
-- Retry logic
-- Smaller lock scope
+Access resources in a consistent order, use short transactions, and reduce lock scope where safe. If retrying a deadlock victim, retry the whole logical transaction with its original idempotency key.
 
 ## Connection Pool
 
-Opening a database connection may involve:
+Opening a physical SQL connection can require a TCP connection, TLS, authentication, and session setup. A connection pool reuses established connections:
 
 ```text
-TCP handshake
-TLS handshake
-Authentication
-Session creation
+Borrow a connection → execute SQL → return the connection
 ```
 
-A Connection Pool reuses established connections:
-
-```text
-Rent Connection
-↓
-Execute SQL
-↓
-Return Connection
-```
-
-Important points:
-
-- The pool reuses physical connections
-- `Close` / `Dispose` often returns the connection to the pool
-- It does not necessarily close the TCP connection
-- `Max Pool Size` limits the number of pooled connections
-
-Connection Pooling reduces:
-
-- Connection establishment overhead
-- Repeated authentication/setup cost
-
-It does not make SQL execution itself faster.
+`Close` or `Dispose` usually returns a pooled connection rather than closing its socket. `Max Pool Size` limits the pool, so long transactions can leave other requests waiting. Pooling saves connection setup work; it does not make a slow query faster.
 
 ## Database Migration
 
-EF Core examples:
+EF Core migrations describe schema changes:
 
 ```bash
-dotnet ef migrations add AddPhoneNumber
-dotnet ef database update
+dotnet ef migrations add AddPhoneNumber --project src/Ecommerce.Api --output-dir Infrastructure/Persistence/Migrations
+dotnet ef database update --project src/Ecommerce.Api
 ```
 
-The most important production concern is:
-
-**Backward Compatibility**
+These are example commands, not a change required for this checkout. Plan migrations so old and new application versions can coexist during a rollout.
 
 ### Expand and Contract Pattern
 
 ```text
-Expand schema
-↓
-Deploy compatible code
-↓
-Backfill data
-↓
-Switch reads/writes
-↓
-Remove old code
-↓
-Contract schema
+Add compatible schema → deploy compatible code → backfill data
+→ switch reads/writes → remove old code → remove old schema
 ```
+
+For example, add a new nullable column before requiring every running instance to write it. Remove the old column only after old code no longer uses it.
 
 ### Backfill
 
-Update existing historical data gradually instead of locking a huge table with one massive operation.
+A backfill updates existing rows to match a new model. Work in manageable batches to control locks, transaction size, and load. Plan how writes arriving during the backfill stay correct.
 
 ## Read Replicas
 
-Architecture:
+A primary accepts writes and replicates them to read replicas. Read traffic can move to replicas, but replication lag means a recent write may be missing from a replica.
 
-```text
-Primary
-↓ Replication
-Replica 1
-Replica 2
-```
-
-Writes:
-
-```text
-Primary
-```
-
-Reads:
-
-```text
-Replicas
-```
-
-Main problem:
-
-**Replication Lag**
-
-This can lead to:
-
-**Stale Reads**
+Choose which reads can tolerate stale data. A checkout or immediate confirmation may need the primary. This project uses one SQL Server and has no read-replica routing.
 
 ## Partitioning and Sharding
 
 ### Partitioning
 
-Split a large table into logical partitions inside a database system.
-
-Example:
-
-```text
-Orders_2025
-Orders_2026
-```
+Partitioning divides a table's data within a database system, for example by order date. Conceptually, 2025 orders and 2026 orders belong to different partitions; this does not require manually creating a table for each year.
 
 #### Partition Pruning
 
-The database accesses only relevant partitions.
+When a query filters on the partition key, the database may skip irrelevant partitions. A query that needs every partition gains less from this layout.
 
 ### Sharding
 
-Distribute data across independent database nodes.
-
-```text
-UserId
-↓
-Shard
-```
-
-The key choice is:
-
-**Shard Key**
+Sharding places subsets of data on independent database nodes. A shard key such as customer ID tells the application where to route a query.
 
 ### Hot Shard / Data Skew
 
-A poor shard key may cause one shard to receive too much data or traffic.
+A key that concentrates busy customers or data on one shard creates a bottleneck. Plan for uneven traffic and for moving data when the shard layout changes.
 
 ### Scatter-Gather Query
 
-If the target shard is unknown:
-
-```text
-Query all shards
-↓
-Merge results
-```
-
-This is expensive.
+A query without a known target shard may query every shard and merge the results. This adds network work and makes sorting and pagination harder.
 
 ### Cross-Shard Transaction
 
-Transactions across shards are difficult.
-
-Common approaches:
-
-- Saga
-- Eventual Consistency
-- Compensation
+A transaction spanning shards needs coordination beyond an ordinary local transaction. Some systems use distributed transactions; others use sagas, eventual consistency, and compensating actions. These choices change the guarantees callers receive. Sharding and sagas are learning topics here.
 
 ## Distributed Locking
 
-A local lock:
+C# `lock` protects threads in one process. It does not coordinate separate API instances.
 
-```csharp
-lock (...)
-```
-
-only protects one process.
-
-Distributed systems may use:
-
-- Database locking
-- Redis-based locking
-- Atomic database operations
-
-Redis-style lock concept:
+Shared systems can coordinate through database locks, constraints, atomic updates, or a distributed lock service. A Redis lock commonly starts with:
 
 ```text
-SET key value NX PX ttl
+SET lock-key unique-token NX PX ttl
 ```
 
-Use a unique token to prevent one process from releasing another process's lock.
+`NX` acquires only an absent key; `PX` gives it an expiry. Release must check the unique token atomically so one owner cannot delete another's lock. Expiry can occur while the original owner is still working, so sensitive writes may also need fencing tokens or database conditions.
 
-General rule:
-
-> Prefer atomic database operations or constraints when possible instead of distributed locks.
+Prefer a database constraint or atomic update when it already solves the problem. This project uses SQL safeguards, not Redis locks.
 
 ## Project examples
 
-[ShopDb](../../Data/ShopDb.cs) maps entities and constraints. `IQueryable` operations such as `Where` and `Select` build a SQL query; `ToListAsync` or `SingleOrDefaultAsync` executes it. The paginated `GET /orders` query in [OrderEndpoints](../../Endpoints/OrderEndpoints.cs) filters by customer, uses `AsNoTracking`, orders by creation time, and projects only response fields. The order-detail query uses `Include` to load its items. These are concrete ways to control what data EF Core reads; they do not mean every query in the app has been performance-tuned.
+[ShopDbContext](../../src/Ecommerce.Api/Infrastructure/Persistence/ShopDbContext.cs) defines relationships, unique keys, the nonnegative-stock constraint, and `Product.Version`. Unique keys cover order, payment, and refund replay identities; a processed-message primary key prevents duplicate markers. Shipments and returns also have per-order uniqueness rules.
 
-The model has a unique `(CustomerId, IdempotencyKey)` index, similar unique keys for payment and refund attempts, a customer/date order-list index, a stock check constraint, and a processed-message primary key. Indexes make particular reads and uniqueness checks efficient, but cost storage and write work. See the [local order-list index measurement](../sqlserver-order-list-performance.md) for one measured example.
+The customer order list in [OrdersController](../../src/Ecommerce.Api/Features/Orders/Controllers/OrdersController.cs) filters by owner, uses `AsNoTracking`, sorts by creation time and ID, and projects response fields. The detail query uses `Include` for order items. These are examples of controlling reads, not proof that every query is tuned.
 
-Checkout combines three safeguards in [OrderService](../../Services/OrderService.cs):
+Checkout combines three protections in [OrderService](../../src/Ecommerce.Api/Features/Orders/Services/OrderService.cs):
 
-1. A transaction groups stock updates, the order, and the Outbox row. An early return or failure rolls back uncommitted changes.
-2. A SQL Server `UPDLOCK`/`HOLDLOCK` lookup through the unique key index makes another request with the same key wait, even when no order exists yet. The second request can then return the first order as a replay.
-3. A conditional `ExecuteUpdateAsync` reduces stock only when enough remains. The database checks the condition as part of the update, so two buyers cannot both reserve the last unit.
+1. A transaction groups stock changes, the order, and the Outbox row.
+2. A lookup through the unique key index uses `UPDLOCK` and `HOLDLOCK`. A second request with the same customer/key waits, including when the first order does not exist yet.
+3. Conditional stock updates succeed only when enough stock remains.
 
-This combines **pessimistic locking** for same-key checkout with an **atomic update** for inventory. It is more precise than “read, check in C#, then write.” [PaymentService](../../Services/PaymentService.cs) and [RefundService](../../Services/RefundService.cs) also use SQL Server locking for operations that can race. The `Product.Version` model property is a concurrency token, and product search additionally uses that version to reject stale indexing events; this does not mean every entity uses optimistic concurrency. See the [SQL lock sequence](../workflows.md#two-requests-with-the-same-idempotency-key).
+After the first transaction commits, the waiting same-key request can replay it. A request with different details and the same key is rejected. This combines pessimistic locking for replay identity with atomic inventory updates.
 
-`FromSqlInterpolated` in these services passes values as parameters while expressing SQL Server lock hints. A normal LINQ lookup, such as `SingleOrDefaultAsync`, is appropriate when the query does not need those hints. The explicit SQL is about the required lock behavior, not about SQL Server generally taking longer to answer a query.
+[PaymentService](../../src/Ecommerce.Api/Features/Payments/Services/PaymentService.cs), [RefundService](../../src/Ecommerce.Api/Features/Refunds/Services/RefundService.cs), and fulfillment services also protect operations that can race. Their `FromSqlInterpolated` calls parameterize values while expressing SQL Server lock hints. Ordinary LINQ is suitable when those hints are unnecessary.
 
 ### How connection pooling works here
 
-The normal API registers a scoped `ShopDb` and chooses the SQL Server provider in [Program.cs](../../Program.cs):
+[Program.cs](../../src/Ecommerce.Api/Program.cs) registers a scoped context with `AddDbContext` and `UseSqlServer`. The normal connection string leaves SQL client pooling enabled. EF Core opens a connection when needed and closes it after the operation; an explicit transaction keeps its connection until the transaction ends.
 
-```csharp
-builder.Services.AddDbContext<ShopDb>(options =>
-    options.UseSqlServer(connectionString));
-```
+Each HTTP request gets its own scoped `ShopDbContext`; workers create scopes for their work. Three different resources are involved:
 
-There is no `Pooling=false` in the application's connection string, so the SQL client uses its **default connection pool**. When EF Core needs SQL Server, it opens a connection that the client can take from this pool. After EF Core finishes and closes the connection, the client can return it for another operation. An explicit transaction keeps its connection in use until that transaction ends. This pool belongs to the application's SQL client; it is not a table or setting that this project creates inside SQL Server.
+| Pool or scope | Reuses or owns |
+| --- | --- |
+| SQL connection pool | Physical database connections |
+| DI scope | Service objects used for one request or worker batch |
+| .NET Thread Pool | Threads that execute C# work |
 
-Each HTTP request gets its own scoped `ShopDb`. Background workers create their own scopes. **A `ShopDb` instance is not a pooled SQL connection:** `AddDbContext` does not enable EF Core's separate `DbContext` pooling feature. The [.NET thread pool](csharp-fundamentals.md#thread-pool-and-asyncawait) is also separate; it supplies threads to run C# code.
-
-The disposable [verification databases](../../Verification/VerificationDatabase.cs) explicitly set `Pooling = false` in their SQL connection strings. Those checks create and delete temporary databases, so they avoid keeping connections to a database they are about to delete. The normal API leaves pooling enabled.
-
+`AddDbContext` does not enable EF Core's separate context-pooling feature. The disposable [verification databases](../../src/Ecommerce.Api/Verification/VerificationDatabase.cs) set `Pooling = false` so they do not retain pooled connections to databases they delete.
 
 ### SQL Server and SQLite comparison
 
-| | SQL Server used by this project | SQLite alternative |
+| Concern | SQL Server here | SQLite alternative |
 | --- | --- | --- |
-| Key lookup | Uses `FromSqlInterpolated` with `UPDLOCK`, `HOLDLOCK`, and the unique-key index | Uses an ordinary EF Core `Where` query; SQL Server hints do not apply |
-| Concurrent writes | Locks the matching key or missing-key range until the transaction ends, so another same-key checkout waits | SQLite allows only one writer at a time, rather than locking an individual order key |
-| Result under contention | After the first transaction commits, the waiting same-key call can read and replay its order | A competing operation may wait, retry, or fail with a busy/locked timeout; do not assume the SQL Server wait-and-replay behavior |
-| Shared safeguards | The transaction keeps stock, order, and Outbox atomic; the unique `(CustomerId, IdempotencyKey)` index prevents a second order for that key | Transactions and unique indexes are also available in SQLite, but are not used by this project's current runners |
+| Same-key lookup | Uses `UPDLOCK`, `HOLDLOCK`, and a unique-key index | SQL Server hints do not apply |
+| Writes | Can lock a row or key range while other work continues | Allows one writer at a time |
+| Contention | A waiting same-key request can replay the committed order | May wait or fail with a busy/locked timeout |
+| Setup | Needs a server and its resources | Embedded, with no separate database server |
+| Rules | Transactions and unique constraints | Also supports transactions and unique constraints |
 
-Practical pros and cons for this project:
+SQLite can fit production workloads with suitable concurrency and storage requirements. It cannot verify SQL Server-specific locking. The API and current database runners use SQL Server, so their behavior should be checked against that provider. Neither database removes the need for idempotency and constraints.
 
-| Database | Advantages here | Trade-offs here |
-| --- | --- | --- |
-| SQL Server | Supports many concurrent clients with targeted locking; the API and SQL Server verification exercise the same database behavior | Requires a running server and more setup/resources; the SQL Server-specific locking query must be maintained and checked |
-| SQLite | Embedded and serverless; still supports transactions and unique indexes | Only one writer at a time; contention can cause waits or busy timeouts; it cannot verify SQL Server's `UPDLOCK`/`HOLDLOCK` behavior |
-
-The API and all current verification runners use SQL Server. The `--verify` runner covers business rules in disposable databases, while `--verify-sqlserver` adds focused lock and concurrency checks. Neither database removes the need for idempotency keys and database constraints. SQLite can also serve production applications when its concurrency and deployment model fit their needs. For the database rules behind this comparison, see [SQL Server table hints](https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table), [SQL Server transaction locking](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide), [SQLite overview](https://www.sqlite.org/about.html), [SQLite transactions](https://www.sqlite.org/lang_transaction.html), and [Microsoft.Data.Sqlite concurrency](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/transactions).
+See [SQL Server table hints](https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table), [transaction locking](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide), [SQLite overview](https://www.sqlite.org/about.html), [SQLite transactions](https://www.sqlite.org/lang_transaction.html), and [Microsoft.Data.Sqlite concurrency](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/transactions).
 
 ---
 

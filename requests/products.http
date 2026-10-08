@@ -1,0 +1,46 @@
+@baseUrl = http://127.0.0.1:5088
+
+### Search names and descriptions (no login required)
+# Expected: 200, headphones and mouse
+GET {{baseUrl}}/products/search?q=wireless
+
+### Match the headphones description
+# Expected: 200, headphones
+GET {{baseUrl}}/products/search?q=bluetooth
+
+### Match the mouse description
+# Expected: 200, mouse
+GET {{baseUrl}}/products/search?q=laptops
+
+### No matches
+# Expected: 200, products: [], total: 0
+GET {{baseUrl}}/products/search?q=no-such-product-7392108
+
+### Missing query
+# Expected: 400
+GET {{baseUrl}}/products/search
+
+### Blank query
+# Expected: 400
+GET {{baseUrl}}/products/search?q=%20%20
+
+### Category and inclusive price filters
+GET {{baseUrl}}/products/search?q=wireless&category=Audio&minPriceCents=1000&maxPriceCents=6000
+
+### First page with one product
+GET {{baseUrl}}/products/search?q=wireless&page=1&pageSize=1
+
+### Second page; inspect total and page metadata
+GET {{baseUrl}}/products/search?q=wireless&page=2&pageSize=1
+
+### Invalid pagination: expected 400
+GET {{baseUrl}}/products/search?q=wireless&pageSize=51
+
+### SQL browse with price sort
+GET {{baseUrl}}/products?sort=priceAsc&page=1&pageSize=20
+
+### Fresh SQL detail
+GET {{baseUrl}}/products/1
+
+### Sorted indexed search
+GET {{baseUrl}}/products/search?q=wireless&sort=priceDesc

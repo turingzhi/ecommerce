@@ -1,0 +1,27 @@
+@baseUrl = http://127.0.0.1:5088
+@accessToken = PASTE_ACCESS_TOKEN_HERE
+@productId = 1
+
+### Read your cart; 200 with items
+GET {{baseUrl}}/cart
+Authorization: Bearer {{accessToken}}
+
+### Add or replace an exact quantity; 204, repeat-safe
+PUT {{baseUrl}}/cart/items/{{productId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{ "quantity": 2 }
+
+### Remove item; 204 even if already absent
+DELETE {{baseUrl}}/cart/items/{{productId}}
+Authorization: Bearer {{accessToken}}
+
+### Clear cart; 204 even if already empty
+DELETE {{baseUrl}}/cart
+Authorization: Bearer {{accessToken}}
+
+### Checkout your cart; use a fresh key for each new checkout, same key for retries
+POST {{baseUrl}}/cart/checkout
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: REPLACE_WITH_A_NEW_CHECKOUT_KEY

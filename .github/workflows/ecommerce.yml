@@ -12,6 +12,17 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+          cache-dependency-path: src/storefront/package-lock.json
+      - name: Frontend install, test and production build
+        run: |
+          npm --prefix src/storefront ci
+          npm --prefix src/storefront test
+          npm --prefix src/storefront run build
+          cd src/storefront && npx playwright install --with-deps chromium
       - name: Restore
         run: dotnet restore Ecommerce.sln
       - name: Build
@@ -23,38 +34,113 @@ jobs:
           password="Aa!$(openssl rand -hex 16)"
           echo "::add-mask::$password"
           echo "MSSQL_SA_PASSWORD=$password" >> "$GITHUB_ENV"
+          adminPassword="Admin!9$(openssl rand -hex 16)"
+          echo "::add-mask::$adminPassword"
+          echo "DEFAULT_ADMIN_ENABLED=true" >> "$GITHUB_ENV"
+          echo "DEFAULT_ADMIN_EMAIL=admin@ci.example.invalid" >> "$GITHUB_ENV"
+          echo "DEFAULT_ADMIN_PASSWORD=$adminPassword" >> "$GITHUB_ENV"
           printf 'ECOMMERCE_SQLSERVER=Server=127.0.0.1,14333;Database=Ecommerce;User Id=sa;Password=%s;Encrypt=True;TrustServerCertificate=True\n' "$password" >> "$GITHUB_ENV"
       - name: Start full stack
         run: docker compose up -d --build --wait
+      - name: Verify catalog and storefront support API
+        run: |
+          python3 tests/http/verify_catalog_admin_http.py
+          python3 tests/http/verify_storefront_support_http.py
+          python3 tests/http/verify_admin_reads_http.py
+          python3 tests/http/verify_default_admin_http.py --restart
+      - name: Default storefront browser checks
+        run: npm --prefix src/storefront run test:e2e
+      - name: Optional telemetry viewer smoke and outage
+        run: npm --prefix src/storefront run test:observability
       - name: Verify service workflows
-        run: dotnet run --project Ecommerce.csproj --no-build -- --verify
+        run: dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify
       - name: Check API readiness
         run: curl --fail --show-error --retry 20 --retry-delay 3 --retry-connrefused http://127.0.0.1:5088/health
       - name: Check automatic product search
         run: |
           for attempt in {1..20}; do
             if curl --fail --silent --show-error 'http://127.0.0.1:5088/products/search?q=wireless' |
-              python3 -c 'import json,sys; names={item["name"] for item in json.load(sys.stdin)}; sys.exit(0 if {"Wireless Mouse", "Wireless Headphones"} <= names else 1)'; then
+              python3 -c 'import json,sys; names={item["name"] for item in json.load(sys.stdin)["products"]}; sys.exit(0 if {"Wireless Mouse", "Wireless Headphones"} <= names else 1)'; then
               exit 0
             fi
             sleep 2
           done
           echo 'Sample products did not reach Elasticsearch' >&2
           exit 1
+      - name: Verify health and dependency recovery
+        run: python3 tests/http/verify_health_http.py --outages
       - name: Verify authenticated HTTP workflow
-        run: python3 scripts/verify_http.py
+        run: python3 tests/http/verify_checkout_http.py
+      - name: Verify cancellation HTTP workflow
+        run: python3 tests/http/verify_cancellation_http.py
+      - name: Verify filtered search HTTP workflow
+        run: python3 tests/http/verify_search_http.py
+      - name: Verify Redis cart and recovery
+        run: python3 tests/http/verify_cart_http.py --outages
+      - name: Verify cart checkout and retries
+        run: python3 tests/http/verify_cart_checkout_http.py --outages
+      - name: Verify default shipment API
+        run: python3 tests/http/verify_shipment_http.py
+      - name: Verify default shipment administration
+        run: python3 tests/http/verify_shipment_status_http.py
+      - name: Verify fulfillment and returns in default environment
+        run: |
+          python3 tests/http/verify_fulfillment_http.py
+          python3 tests/http/verify_returns_http.py
+      - name: Verify default financial read API
+        run: python3 tests/http/verify_financial_reads_http.py
+      - name: Verify default refund API and simulator absence
+        run: python3 tests/http/verify_refund_http.py
+      - name: Verify simulator is disabled by default
+        run: python3 tests/http/verify_payment_simulation_http.py --disabled
+      - name: Enable Development simulator
+        run: docker compose -f compose.yaml -f compose.development.yaml up -d --wait ecommerce
+      - name: Verify simulated payment outcomes
+        run: python3 tests/http/verify_payment_simulation_http.py
+      - name: Verify partial refunds and simulated outcomes
+        run: python3 tests/http/verify_refund_http.py --development
+      - name: Verify payment and refund read workflows
+        run: python3 tests/http/verify_financial_reads_http.py --development
+      - name: Verify paid-order shipments
+        run: python3 tests/http/verify_shipment_http.py --development
+      - name: Verify shipment status transitions
+        run: python3 tests/http/verify_shipment_status_http.py --development
+      - name: Verify fulfillment and returns with simulated outcomes
+        run: |
+          python3 tests/http/verify_fulfillment_http.py --development
+          python3 tests/http/verify_returns_http.py --development
+      - name: Development storefront lifecycle
+        run: STOREFRONT_DEVELOPMENT=1 npm --prefix src/storefront run test:e2e
+      - name: Restore default API environment
+        run: docker compose up -d --wait ecommerce
       - name: Verify SQL Server workflows
-        run: dotnet run --project Ecommerce.csproj --no-build -- --verify-sqlserver
+        run: dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-sqlserver
+      - name: Verify catalog and durable trace SQL rules
+        run: |
+          dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-catalog
+          dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-telemetry
+      - name: Verify shipment SQL atomicity
+        run: dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-shipments
+      - name: Verify return SQL rules and concurrency
+        run: dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-returns
       - name: Pause API consumer for isolated broker checks
         run: docker compose stop ecommerce
       - name: Verify RabbitMQ delivery
-        run: dotnet run --project Ecommerce.csproj --no-build -- --verify-rabbitmq
+        run: dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-rabbitmq
       - name: Verify product synchronization
-        run: dotnet run --project Ecommerce.csproj --no-build -- --verify-product-sync
+        run: dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-product-sync
       - name: Restart API and check recovery
         run: |
           docker compose up -d --wait ecommerce
           curl --fail --show-error http://127.0.0.1:5088/health
+      - name: Verify rate limits and recovery
+        run: python3 -u tests/http/verify_rate_limit_http.py
+      - name: Upload browser failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storefront-browser-failures
+          path: src/storefront/test-results/**/test-failed-*.png
       - name: Show container logs on failure
         if: failure()
         run: docker compose logs --no-color --tail=200

@@ -1,0 +1,27 @@
+@baseUrl = http://127.0.0.1:5088
+@accessToken = PASTE_ACCESS_TOKEN_HERE
+@paymentId = PASTE_SUCCEEDED_PAYMENT_ID_HERE
+@refundId = PASTE_REFUND_ID_HERE
+
+### Create a partial refund; a new key for each intended refund, same key for retry
+POST {{baseUrl}}/payments/{{paymentId}}/refunds
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: REPLACE_WITH_A_NEW_REFUND_KEY
+Content-Type: application/json
+
+{ "amountCents": 2000 }
+
+### Development only: resolve the refund; success, failure, or timeout
+POST {{baseUrl}}/dev/refunds/{{refundId}}/simulate
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{ "outcome": "success" }
+
+### Read your payment's refund history, newest first
+GET {{baseUrl}}/payments/{{paymentId}}/refunds?page=1&pageSize=10
+Authorization: Bearer {{accessToken}}
+
+### Read one refund's current status
+GET {{baseUrl}}/refunds/{{refundId}}
+Authorization: Bearer {{accessToken}}

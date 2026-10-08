@@ -1,0 +1,9 @@
+# Generated files and local dependencies
+node_modules/
+dist/
+.vite/
+coverage/
+test-results/
+playwright-report/
+blob-report/
+package-lock.json

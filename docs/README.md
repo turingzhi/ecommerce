@@ -1,37 +1,38 @@
 # Documentation
 
-Use the [project README](../README.md) for capabilities and quick start. This index organizes the detailed application guides and backend reference.
+Start with the [project README](../README.md) to run the application.
+Commands run from the repository root unless a guide says otherwise.
 
-## Run, use, and verify
+## Run and use
 
-| Task | Guide |
-| --- | --- |
-| Start the local stack | [Docker Compose quick start](../README.md#run-with-docker-compose) |
-| Configure services, inspect logs, and diagnose failures | [Local operations](operations.md) |
-| Try checkout and search outage recovery | [Local demonstration](demo.md) |
-| Send requests and interpret responses | [HTTP API reference](api.md) |
-| Run checks and understand CI results | [Verification](verification.md) |
+- [Docker and local operations](docker.md): setup, ports, configuration, logs, and troubleshooting.
+- [Storefront](storefront.md): browsing, sign-in, checkout, and admin pages.
+- [Admin access](admin.md): default account and individual permissions.
+- [API reference](api.md): routes, request bodies, responses, and errors.
+- [Local demo](demo.md): checkout and search outage exercises.
+- [Verification](verification.md): unit, SQL, HTTP, browser, and CI checks.
+- [Health](health.md): liveness and dependency reports.
+- [Metrics and tracing](observability.md): OpenTelemetry and dashboard login.
 
-## Understand the implementation
+## Business features
 
-Read architecture first, then follow the workflow or subsystem relevant to your question.
+- [Cart](cart.md): quantities, expiration, and checkout.
+- [Payments and refunds](payments.md): attempts, balances, and local simulation.
+- [Shipments and returns](fulfillment.md): tracking, operator updates, and return settlement.
+- [Rate limiting](rate-limiting.md): shared quotas and retry behavior.
 
-| Guide | Responsibility |
-| --- | --- |
-| [Application architecture](architecture.md) | Runtime boundaries, request flow, and code map |
-| [Workflow diagrams](workflows.md) | Order/payment/refund states, SQL locking, and failure paths |
-| [RabbitMQ delivery](rabbitmq.md) | Outbox publication, acknowledgements, retries, and dead letters |
-| [Product synchronization](product-sync.md) | Catalog writes, versioned Elasticsearch documents, and recovery |
-| [SQL Server order-list measurement](sqlserver-order-list-performance.md) | One measured index change, method, and limitations |
+## Understand the code
 
-## Backend knowledge
+- [Project structure](project-structure.md): folders, names, and where to find endpoints/services.
+- [Architecture](architecture.md): components and request flow.
+- [Dependency injection](knowledge/csharp-fundamentals.md#interfaces-and-dependency-injection): lifetimes, request scopes, disposal, and interfaces.
+- [DI, database, and Redis review](architecture-review.md): verified findings, risks, and a prioritized plan.
+- [Workflows](workflows.md): transactions, state changes, and duplicate requests.
+- [RabbitMQ](rabbitmq.md): Outbox publication, retries, and duplicate delivery.
+- [Product synchronization](product-sync.md): catalog writes and Elasticsearch indexing.
+- [Redis](redis.md): cache keys, expiration, invalidation, and CLI exercises.
+- [Order-list measurement](sqlserver-order-list-performance.md): one dated SQL index comparison.
+- [Backend learning guide](knowledge/README.md): seven chapters with project examples.
+- [Feature history](history/2026-10-08-features.md): earlier design decisions.
 
-The [backend learning guide](knowledge/README.md) contains seven chapters covering C#, encapsulation, DI, APIs, databases, messaging, search, reliability, and deployment. General examples are distinguished from implemented project features.
-
-## Where documentation belongs
-
-- Root `README.md`: application overview, quick start, and current limitations.
-- `docs/`: actual API behavior, workflows, operational commands, verification, and measured results.
-- `docs/knowledge/`: reusable concepts and explanations, with links to project examples.
-
-Keep one main explanation per topic. Link to that explanation from other guides; keep diagrams next to the workflow they describe. Use descriptive lowercase, hyphenated filenames, and update links and this index when moving a page. Historical measurements retain their date and scope.
+Each topic has one main guide. Link to it instead of copying the same explanation.

@@ -2,9 +2,9 @@
 
 [Learning index](README.md) · [Documentation index](../README.md)
 
-Understand faster reads and asynchronous work, then distinguish delivery guarantees, duplicate protection, retries, and consistency across systems. Code snippets are general examples unless they link to a repository file.
+Learn when a cache helps, how messages survive failures, and why retries need duplicate protection. Snippets are teaching examples unless linked to source code.
 
-> **In this project:** There is no Redis cache or Kafka in this app. It uses a SQL Outbox, RabbitMQ, consumer deduplication, and an eventually consistent Elasticsearch product index. The SQL Outbox dead-letter flag and RabbitMQ dead-letter queue are separate. See [RabbitMQ delivery](../rabbitmq.md), [product synchronization](../product-sync.md), and [OutboxDispatcher](../../Services/OutboxDispatcher.cs).
+**In this project:** Redis stores [customer carts](../cart.md) and caches search responses. A SQL Outbox sends events through RabbitMQ. Consumers update Elasticsearch and create shipments. Kafka, sagas, and cache sharding are learning topics, not installed features.
 
 ## On this page
 
@@ -22,368 +22,214 @@ Understand faster reads and asynchronous work, then distinguish delivery guarant
 
 ## Cache and Redis
 
+A cache keeps a reusable copy of data to make reads cheaper. Decide what may be stale, how long it may be stale, and what happens when the cache is unavailable.
+
 ### Cache-Aside Pattern
 
 ```text
-Read Cache
-↓
-Hit → Return
-
-Miss
-↓
-Read Database
-↓
-Write Cache
-↓
-Return
+Read cache → hit: return cached value
+           → miss: read backing store → cache result → return result
 ```
+
+This project's search backing store is Elasticsearch. SQL Server remains authoritative for product price and stock at checkout.
 
 ### TTL
 
-**TTL — Time To Live**
+Time to live (TTL) sets how long a key remains before expiring. It limits how long cached data survives, but does not guarantee that it is current before expiry.
 
-Defines how long a cache entry remains valid.
+Search responses expire after 30 seconds here. Nonempty carts refresh a seven-day inactivity expiry when accessed or changed. A cart is user state stored in Redis, not merely a disposable copy of SQL data; see [Redis](../redis.md) for recovery and persistence limits.
 
 ### Cache Invalidation
 
-When database data changes, cache data may become stale.
+When backing data changes, delete its cached copy, update it, wait for TTL, or invalidate through an event. Each approach has failure windows.
 
-Common strategies:
-
-- Delete cache entry
-- Update cache entry
-- Use TTL
-- Event-driven invalidation
+The product consumer increments `products:search:generation` after indexing a snapshot. Search keys include that generation, so later requests use a new set of keys. Old keys expire naturally. This reduces stale-cache reads but does not remove the delay before the event is consumed.
 
 ### Cache Stampede / Thundering Herd
 
-A popular key expires and many requests hit the database at the same time.
-
-Mitigation:
-
-- Locking
-- Request coalescing
-- TTL jitter
-- Background refresh
+When a popular key expires, many misses can hit the backing store at once. Coalesce identical requests, refresh in the background, vary expiries with jitter, or use bounded coordination. This project does not implement stampede protection.
 
 ### Cache Penetration
 
-Repeated requests for data that does not exist.
-
-Mitigation:
-
-- Negative caching
-- Bloom Filter
-- Rate limiting
+Repeated lookups for nonexistent data still cost work. Short-lived negative caching can help. A Bloom filter can rule out some impossible lookups, but false positives still require a real check. Rate limiting can reduce abuse.
 
 ### Hot Key
 
-One key receives a disproportionately large amount of traffic.
+A hot key receives much more traffic than other keys. Sharding alone may not fix it because that key still maps to one node. Consider local copies, request coalescing, or a different data layout after measuring.
 
 ### Eviction
 
-Common policies:
-
-- LRU
-- LFU
-- TTL-based eviction
+A cache under memory pressure may evict keys. LRU favors recently used data; LFU favors frequently used data. Some policies choose among keys with TTLs. Expiration and eviction are different: one follows a key's clock, the other frees capacity. Do not assume cart data has the same loss tolerance as cached search results.
 
 ## Distributed Cache and Consistent Hashing
 
-With multiple API instances:
+Separate API instances have separate in-memory caches. A shared Redis service lets them read the same keys:
 
 ```text
-Server A Cache
-≠
-Server B Cache
-```
-
-A distributed cache solves this:
-
-```text
-Server A ─┐
-Server B ─┼→ Redis
-Server C ─┘
+API A ─┐
+API B ─┼→ Redis
+API C ─┘
 ```
 
 ### Sharding
 
-Distribute keys across multiple cache nodes.
+Cache sharding divides keys across nodes. It increases capacity, but adds routing and failure-handling work.
 
 ### hash(key) % N
 
-Simple but problematic when the number of nodes changes.
-
-Adding or removing a node can remap many keys.
+Modulo routing is simple: hash a key and take the remainder for `N` nodes. Changing `N` moves many keys, causing misses and load on the backing store.
 
 ### Consistent Hashing
 
-Uses a hash ring so node changes only remap part of the key space.
+Consistent hashing places keys and nodes on a ring. Adding or removing a node moves only part of the key space. This is one general routing approach; the local Redis service here is a single node.
 
 ### Virtual Nodes
 
-Each physical node gets multiple positions on the hash ring.
-
-This improves load distribution.
+Give each physical node several positions on the ring to spread keys more evenly. This helps balance key distribution, though one very hot key can still dominate traffic.
 
 ### Replication
 
-Copies the same data to multiple nodes.
-
-Used for:
-
-- Availability
-- Failover
-- Read scaling
+Replication copies data to other nodes for failover, availability, or read capacity. It differs from sharding, which splits data. Replication lag and failover behavior affect what callers may see or lose.
 
 ## Message Queues
 
-Common technologies:
-
-- RabbitMQ
-- Kafka
-
-Basic model:
+A producer publishes work to a broker; a consumer processes it later:
 
 ```text
-Producer
-↓
-Broker
-↓
-Consumer
+Producer → broker → consumer
 ```
+
+This allows the producer and consumer to work at different speeds and recover independently. It also introduces delays, retries, and operational backlog.
 
 ### RabbitMQ
 
-Often used for:
-
-- Task queues
-- Reliable message delivery
-- Work distribution
+RabbitMQ supports queues, routing, acknowledgements, and work distribution. Here the Outbox publisher sends events and the worker consumes them. Publisher confirmation and consumer acknowledgement are separate steps.
 
 ### Kafka
 
-Often used for:
-
-- Event streaming
-- Append-only event logs
-- High-throughput pipelines
-- Event replay
+Kafka stores ordered records in partitioned logs. Consumers track their offsets, making retention and replay central to its model. It is often used for event streams and high-throughput pipelines. It is not installed in this project.
 
 ### Retry
 
-Transient failures may be retried.
-
-Good practices:
-
-- Exponential Backoff
-- Jitter
-- Retry limit
+Retry transient failures with increasing delay, jitter, and a suitable budget. Retrying immediately can worsen an outage. A retry is safe only when the logical operation tolerates another attempt.
 
 ### Dead Letter Queue
 
-Messages that cannot be processed may be sent to a:
+A dead-letter queue (DLQ) holds messages that cannot proceed normally. Use it to inspect failures, alert an operator, and replay after fixing the cause. A DLQ is not successful business processing.
 
-**DLQ — Dead Letter Queue**
-
-Useful for:
-
-- Debugging
-- Manual replay
-- Monitoring
+The SQL Outbox's `DeadLettered` flag and RabbitMQ's DLQ are separate destinations with separate retry rules. See [RabbitMQ delivery](../rabbitmq.md).
 
 ## Delivery Semantics
 
-| Model | Meaning at a stated delivery boundary |
+| Model | Meaning at the stated boundary |
 | --- | --- |
-| At-most-once | A message may be lost, but delivery is not retried into duplicates |
-| At-least-once | Redelivery is possible; consumers must tolerate duplicates |
-| Exactly-once | A guarantee within a specific system or transaction boundary, not automatically across every external effect |
+| At-most-once | A message may be lost; that delivery path does not retry it |
+| At-least-once | A message may arrive again; consumers must tolerate duplicates |
+| Exactly-once | A guarantee within a defined system or transaction boundary |
 
-A RabbitMQ publisher confirmation means the broker accepted responsibility; it does not mean the consumer finished or Elasticsearch was updated. Consumer acknowledgement is a separate signal. Lost confirmations or acknowledgements can cause redelivery. See [RabbitMQ acknowledgements and confirms](https://www.rabbitmq.com/docs/confirms).
+A broker confirmation means RabbitMQ accepted responsibility for a publication. It does not mean the consumer finished or Elasticsearch changed. Lost confirmations or acknowledgements can cause redelivery. See [RabbitMQ acknowledgements and confirms](https://www.rabbitmq.com/docs/confirms).
 
-In practice, a common approach is:
-
-```text
-At-least-once
-+
-Idempotent Consumer
-```
+A common design is at-least-once delivery plus an idempotent consumer. That aims to avoid duplicate business effects even when transport delivers duplicates.
 
 ## Idempotency
 
-An operation is idempotent if performing it multiple times has the same final effect as performing it once.
-
-Example:
-
-```text
-MessageId
-↓
-ProcessedMessages table
-```
-
-If already processed:
-
-```text
-skip
-```
-
-A database constraint should ideally enforce:
-
-```text
-UNIQUE(MessageId)
-```
+An operation is idempotent when repeating the same logical operation has the same final effect as performing it once. A processed-message table can identify a repeated event, with a primary key or unique constraint on `MessageId`.
 
 ### Retry versus duplicate
 
-A **retry** is another attempt after failure or an uncertain result. A **duplicate** is the same logical operation or event arriving again. Retrying can produce a duplicate when the previous attempt succeeded but its response was lost.
+A retry is another attempt after a failure or uncertain result. A duplicate is the same operation arriving again. A retry can become a duplicate if the earlier attempt succeeded but its response was lost.
 
-Reuse the original idempotency key for the same request and preserve the message ID for the same event. A new key means a new operation; it defeats replay protection. Reject reuse of a key with different request details.
+Reuse the original request key and event ID. A new key asks for a new operation. Reject the same key with different details.
 
 ### The processed marker is not the whole guarantee
 
-Checking `ProcessedMessages` and later writing it leaves a crash window around any intervening effect. For effects in the same SQL database, commit the business change and processed marker together. For an external effect, use that system's idempotency or version mechanism as well.
+An effect and a later processed marker leave a crash window. For changes in one SQL database, save the effect and marker in the same transaction. For an external effect, also use that system's idempotency or version checks.
 
-Here Elasticsearch is updated before the SQL marker. Product ID and version make replay safe after a crash in between. A future email or payment-provider handler would need its own duplicate protection; the marker alone would not make those effects exactly-once.
+Here product indexing happens before the SQL marker. Elasticsearch's product ID and version make a repeated snapshot safe. The `OrderPaid` handler saves the shipment, initial history, and marker in one SQL transaction. A future email or payment-provider handler would need its own duplicate protection.
 
 ## Outbox Pattern
 
-Problem:
+Saving SQL data and publishing to RabbitMQ are two operations. A failure can occur after the SQL commit but before publication.
+
+The Outbox saves the pending event alongside the business change:
 
 ```text
-Save Database
-+
-Publish Message
+SQL transaction: save order + Outbox row → commit
+Worker: read pending row → publish → confirm → mark published
 ```
 
-These are not one atomic operation.
-
-Failure scenario:
-
-```text
-DB commit succeeded
-Message publish failed
-```
-
-Outbox solution:
-
-```text
-Database Transaction:
-Order
-+
-OutboxMessage
-↓
-Commit
-```
-
-Background Worker:
-
-```text
-Read pending Outbox messages
-↓
-Publish to Broker
-↓
-Mark Outbox row as published
-```
-
-This ensures business data and pending events are saved atomically.
+The transaction guarantees that the order and pending event exist together. The worker can retry delivery. If publication succeeds but saving the published marker fails, it can publish again; the consumer must tolerate that replay.
 
 ## MessageId, EntityId, and CorrelationId
 
-- **OrderId** — business entity identifier
-- **MessageId** — unique identifier of a message, useful for idempotency
-- **CorrelationId** — identifier used to connect events and requests belonging to the same workflow
+| Identifier | Purpose |
+| --- | --- |
+| Entity ID, such as `OrderId` | Identifies the business object |
+| `MessageId` | Identifies one event and stays stable on retry |
+| Correlation ID | Connects related work across boundaries |
+
+One order can have many events. Retrying one event preserves its message ID; creating another event uses another ID.
+
+The app carries W3C `TraceParent` and `TraceState` from SQL Outbox rows through RabbitMQ so delayed work can join a distributed trace. That trace context differs from the order ID and message ID. A separate business correlation-ID field is not defined.
 
 ### Event contracts and schema evolution
 
-An event is a contract between the producer and consumer. Keep the message ID stable across retries, document field meanings, and plan compatibility when adding or changing payload fields. A consumer deployed before a producer must still understand the messages it receives. Adding optional data is usually easier to roll out than renaming a required field.
+An event's fields and meanings form a producer/consumer contract. Keep IDs stable on retry, add optional fields carefully, and plan changes so older consumers can still read new messages.
 
-This project's [BrokerEvent](../../Services/RabbitMqEventPublisher.cs) envelope carries `Id`, `OrderId`, `Type`, and `Payload`; it has no explicit schema-version field. `Product.Version` orders catalog snapshots—it is a business-data version, not an event-schema version. The current product consumer validates snapshot identity and version, but it does not provide a general schema-migration framework.
+The [BrokerEvent](../../src/Ecommerce.Api/Infrastructure/Messaging/RabbitMq/RabbitMqEventPublisher.cs) envelope has `Id`, optional `OrderId`, `Type`, `Payload`, and optional trace fields. It has no explicit schema-version field. `Product.Version` orders product snapshots; it is not a payload-schema version. Validating snapshot identity and version does not provide a general schema-migration system.
 
 ## Eventual Consistency
 
-Independent distributed systems cannot always share one local transaction.
+A local transaction can commit before another system receives its event. With successful delivery, retries, and replay-safe processing, the downstream copy can catch up. During that delay, reads may differ.
 
-A common design is:
-
-```text
-Local Transaction
-+
-Reliable Messaging
-+
-Retry
-+
-Idempotency
-+
-Eventual Consistency
-```
+For example, catalog changes commit in SQL before the consumer updates Elasticsearch. Checkout still uses SQL price and stock. Monitor failed or aging events; eventual consistency needs a working recovery path.
 
 ## Saga Pattern
 
-A Saga coordinates a business workflow across multiple services.
+A saga coordinates a workflow across services that cannot share one local transaction. For example, reserve inventory, request payment, then arrange delivery.
 
-Example:
+If a later step fails, a compensating action may release the reservation or request a refund. Compensation is another business operation, not a database rollback; it can fail and need a retry too.
 
-```text
-Create Order
-↓
-Charge Payment
-↓
-Reserve Inventory
-```
-
-If a later step fails, the system may perform:
-
-**Compensating Transactions**
-
-Two styles:
-
-- **Choreography** — services react to events
-- **Orchestration** — a central Saga Orchestrator coordinates steps
+In choreography, services react to events. In orchestration, one coordinator decides the next step. The project's order, payment, shipment, and return workflows do not form an implemented distributed saga.
 
 ## CAP Theorem
 
-- C = Consistency
-- A = Availability
-- P = Partition Tolerance
+CAP concerns distributed data during a network partition:
 
-The practical interpretation:
+- **Consistency:** operations behave as if there is one current copy, in the theorem's strong sense.
+- **Availability:** every request to a non-failing node receives a response under the theorem's rules.
+- **Partition tolerance:** nodes must cope with messages between them being lost or delayed.
 
-> When a network partition occurs, a distributed system must trade off Consistency and Availability.
+During a partition, a system cannot guarantee both that consistency and that availability for every operation. This is not a permanent “choose any two” label for the whole application. Decide which operations may serve older data and which should wait or fail.
 
 ### Strong Consistency
 
-After a successful write, later reads observe the latest value.
+A linearizable system makes a successful write visible to later reads as if operations used one ordered copy. Specify the scope of this guarantee; separate caches and search indexes do not inherit it automatically.
 
 ### Eventual Consistency
 
-Temporary inconsistency is allowed, but replicas eventually converge.
+Copies converge if updates stop and replication or event processing continues successfully. It does not promise a fixed maximum delay by itself.
 
 ### Read-after-Write / Read-your-writes
 
-A client should see its own recent writes.
+A client can read its own successful update. Routing the immediate read to the authoritative store is one way to provide this.
 
 ### Monotonic Reads
 
-After observing a newer version, the client should not later observe an older version.
+Once a client sees a newer version, it should not later see an older one. Switching between lagging replicas can violate this unless the system tracks or routes around it.
 
 ## Project examples
 
-The project has three related but different duplicate protections:
-
-| Boundary | Stable identity | What a retry does |
+| Boundary | Replay identity | Protection |
 | --- | --- | --- |
-| Client → order/payment/refund service | Customer plus an idempotency key, or payment plus a refund key | Returns the saved result for the same request; conflicting details are rejected. |
-| SQL Outbox → RabbitMQ | [OutboxMessage.Id](../../Models/OutboxMessage.cs) | A publication may be repeated if the broker confirmed it but saving `PublishedAt` failed. |
-| RabbitMQ → consumer | Same event ID in [ProcessedMessages](../../Data/ShopDb.cs) | A redelivery can be acknowledged without repeating the consumer effect. |
+| Client → order service | Customer plus idempotency key | Same details return the saved order |
+| Client → payment/refund service | Order/payment plus idempotency key | Same attempt replays; conflicting details fail |
+| SQL Outbox → RabbitMQ | Outbox message ID | Repeated publication preserves event identity |
+| RabbitMQ → consumer | Processed-message ID | Saved markers identify completed events |
 
-An **order ID** identifies the business object; an **Outbox message ID** identifies one event about it. A separate end-to-end correlation ID is not implemented. One order may have multiple different events, but a replay of the original checkout does not add another `OrderCreated` row.
+[OutboxDispatcher](../../src/Ecommerce.Api/Infrastructure/Messaging/Outbox/OutboxDispatcher.cs) marks publication only after broker confirmation. Its retry counter differs from the consumer's counter; see [failure classification](../rabbitmq.md) for exact limits.
 
-The Outbox solves a two-system problem: SQL Server cannot atomically commit an order and publish to RabbitMQ in one local transaction. [OutboxDispatcher](../../Services/OutboxDispatcher.cs) later publishes the committed row, waits for broker confirmation, then marks it published. This is **at-least-once delivery**: a failure between confirmation and the marker can produce another delivery, so the consumer must tolerate duplicates.
-
-The SQL Outbox and RabbitMQ consumer have independent retry counters and dead-letter destinations. Keep their exact attempt limits and exception rules in the [delivery guide](../rabbitmq.md#failure-classification-and-retry-timing); do not apply one stage's counter to the other.
-
-SQL Server is the **source of truth** for products. The consumer copies `ProductUpserted` snapshots into Elasticsearch; search can therefore lag behind a committed catalog write. Checkout still reads stock and price from SQL Server. Elasticsearch uses product ID and version so an older event cannot replace a newer search document. This is the project's concrete example of **eventual consistency**. It does not implement a saga or distributed transaction. See [product synchronization](../product-sync.md).
+[EventConsumer](../../src/Ecommerce.Api/Infrastructure/Messaging/EventConsumer.cs) applies `ProductUpserted` snapshots to Elasticsearch and changes the cache generation. Product versions stop an older event replacing a newer search document. `OrderPaid` goes to [ShipmentEventHandler](../../src/Ecommerce.Api/Features/Shipments/Services/ShipmentEventHandler.cs), which checks SQL payment/order state and protects shipment creation with locks and uniqueness. See [product synchronization](../product-sync.md) and [fulfillment](../fulfillment.md).
 
 ---
 

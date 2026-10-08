@@ -1,57 +1,53 @@
-# Local workflow demonstration
+# Local demo
 
-[Documentation index](README.md) · [Project overview](../README.md)
-
-Run these commands from the `Ecommerce` directory with Docker Desktop running. On a first run, copy `.env.example` to `.env` and set `MSSQL_SA_PASSWORD` to a strong local password. The commands below write sample data to the Compose SQL Server volume; `docker compose down` keeps it, while `docker compose down -v` deletes it.
+Run commands from the repository root with the [Docker stack](docker.md) running.
+Payments are simulated, so this walkthrough does not move real money.
 
 ## Successful flow: product to order to payment attempt
 
-1. Start the four services and check the API:
+1. Open [the storefront](http://127.0.0.1:5088/), register, and sign in.
+2. Choose a product with stock, set its quantity, and open Cart.
+3. Check out. The API creates an order using current SQL prices and reserves stock.
+4. Open the order to see its saved items and payment attempt. A Pending attempt
+   means it awaits an outcome; it is not a successful charge.
+5. Refresh or retry an uncertain operation using its original idempotency key.
+   A successful retry returns the saved order/payment without repeating the write.
 
-   ```sh
-   docker compose up -d --build --wait
-   curl -i http://127.0.0.1:5088/health
-   ```
+For a manual HTTP walkthrough, use [auth](../requests/auth.http),
+[cart](../requests/cart.http), [orders](../requests/orders.http), and
+[payments](../requests/payments.http). Replace IDs and tokens with your own values.
 
-   Expect HTTP 200 and `{"status":"healthy"}`. SQL Server migrations and sample products are applied at startup.
-
-2. Create a product through the catalog service. Copy the product ID printed by the command:
-
-   ```sh
-   demo_name="Demo Camera $(date +%s)"
-   docker compose exec -T ecommerce dotnet Ecommerce.dll --create-product "$demo_name" "Wide angle demo camera" "Photo" 12000 3
-   curl -G --data-urlencode "q=$demo_name" http://127.0.0.1:5088/products/search
-   ```
-
-   The SQL product and its `ProductUpserted` Outbox event commit together. Repeat the search after a few seconds if it initially returns `[]`: the worker, RabbitMQ, consumer, and Elasticsearch run asynchronously. The result should show the same product ID and price `12000` cents.
-
-3. In [auth.http](../Http/auth.http), register a fresh local account, then log in and copy the returned `accessToken`. In [orders.http](../Http/orders.http), replace `PASTE_ACCESS_TOKEN_HERE` and change the example body to **one item** with the new product ID and quantity `1`. Send `POST /orders` twice with the **same** `Idempotency-Key` and body. Expect HTTP 201, then HTTP 200 with the **same order ID**. Only one unit is reserved.
-
-4. Copy that order ID into [payments.http](../Http/payments.http), along with the access token. Send `POST /orders/{orderId}/payments` twice with the same key. Expect HTTP 201, then HTTP 200 with the **same payment ID** and amount `12000` cents. The payment remains `Pending`: creating an attempt does not charge money. Payment success/failure and refunds are service-level simulations covered by the verification runners, not public HTTP endpoints.
-
-The order and payment IDs stay the same on replay because each idempotency key identifies an existing request. SQL Server determines stock and price; Elasticsearch is a searchable copy, not the checkout database. The Outbox separates the committed SQL transaction from later RabbitMQ publication.
+To continue through payment success, delivery, and a return, enable
+[Development simulation](payments.md#development-simulation), then follow
+[fulfillment](fulfillment.md). Admin actions need [permissions](admin.md).
 
 ## Outage and recovery: Elasticsearch goes offline
 
-Keep the API, SQL Server, and RabbitMQ running. Stop only search:
+Create a dedicated product for this demo with the [catalog CLI](product-sync.md).
+Then stop search:
 
 ```sh
 docker compose stop elasticsearch
-curl -i http://127.0.0.1:5088/health
-curl -i 'http://127.0.0.1:5088/products/search?q=wireless'
 ```
 
-Health should still return 200 because it checks SQL Server. Search should return 503. While Elasticsearch is down, create another product:
+Search returns 503 on a cache miss, while SQL-backed product details and checkout
+can still work. A previously cached search may return until its 30-second TTL ends.
+Update the demo product through Products admin or the catalog CLI. Its SQL write
+can commit while the search event waits for recovery.
+
+Restart search:
 
 ```sh
-recovery_name="Recovery Camera $(date +%s)"
-docker compose exec -T ecommerce dotnet Ecommerce.dll --create-product "$recovery_name" "Created during search outage" "Photo" 13000 2
 docker compose up -d --wait elasticsearch
-curl -G --data-urlencode "q=$recovery_name" http://127.0.0.1:5088/products/search
 ```
 
-Repeat the last search until the product appears. The CLI confirms that SQL Server saved the product even during the search outage. The API's Outbox worker publishes the event; the consumer retains failed product deliveries in RabbitMQ's durable retry queue and indexes the product after Elasticsearch recovers. There can be a short delay for message retry and search-index refresh. Do not use `--index-products` here: this example demonstrates **automatic** recovery.
+Wait for consumer retries, then search for the updated product. Inspect
+[Outbox and broker delivery](docker.md#inspect-event-delivery) if it stays missing.
+Always restore Elasticsearch after the exercise, including if a step fails.
 
-The SQL write succeeds independently of search. `/health` checks SQL Server but not Elasticsearch, so search can return 503 while health remains 200. SQL Server remains authoritative throughout the outage.
+## More exercises
 
-See the [API reference](api.md) for endpoint details and [product synchronization](product-sync.md) for the recovery path.
+- [Redis](redis.md): cache hit/miss, expiration, invalidation, and an outage.
+- [Metrics and traces](observability.md): request duration and event propagation.
+- [Verification](verification.md): repeatable API and browser checks.
+- [Demo catalog maintenance](../tools/demo/README.md): refresh retained test-product names.
