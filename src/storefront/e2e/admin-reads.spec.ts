@@ -27,7 +27,7 @@ async function signIn(page: Page, email: string) {
 test('operator views another customer order, follows its payments and uses filters on mobile', async ({
   page,
   request,
-}) => {
+}, testInfo) => {
   const operator = await account(request, true),
     customer = await account(request);
   const output = execFileSync(
@@ -84,7 +84,7 @@ test('operator views another customer order, follows its payments and uses filte
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({
-    path: '/private/tmp/ecommerce-admin-payments-mobile.png',
+    path: testInfo.outputPath('ecommerce-admin-payments-mobile.png'),
     fullPage: true,
   });
   await page.getByRole('link', { name: 'Orders admin', exact: true }).click();

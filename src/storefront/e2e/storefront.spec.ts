@@ -47,7 +47,10 @@ async function product(api: APIRequestContext) {
   expect(response.status()).toBe(201);
   return { admin, name, product: await response.json() };
 }
-test('catalog, detail, static API boundaries and mobile layout', async ({ page, request }) => {
+test('catalog, detail, static API boundaries and mobile layout', async ({
+  page,
+  request,
+}, testInfo) => {
   await page.goto('/');
   await expect(
     page.getByRole('heading', { name: 'Find your next everyday essential.' }),
@@ -67,7 +70,7 @@ test('catalog, detail, static API boundaries and mobile layout', async ({ page, 
     expect(reply.headers()['content-type'] ?? '').not.toContain('text/html');
   }
   expect((await request.get('/cart')).status()).toBe(401);
-  await page.screenshot({ path: '/private/tmp/storefront-mobile.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('storefront-mobile.png'), fullPage: true });
 });
 test('real cart checkout retains cart and creates one pending payment', async ({
   page,
@@ -101,7 +104,10 @@ test('real cart checkout retains cart and creates one pending payment', async ({
   await page.reload();
   await expect(page.getByRole('link', { name: 'Sign in' }).first()).toBeVisible();
 });
-test('catalog administrator creates and edits without stock field', async ({ page, request }) => {
+test('catalog administrator creates and edits without stock field', async ({
+  page,
+  request,
+}, testInfo) => {
   const admin = await account(request, true);
   await signIn(page, admin.email);
   await page.getByRole('link', { name: 'Products admin' }).click();
@@ -132,7 +138,7 @@ test('catalog administrator creates and edits without stock field', async ({ pag
     available: 5,
     description: '',
   });
-  await page.screenshot({ path: '/private/tmp/storefront-desktop.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('storefront-desktop.png'), fullPage: true });
 });
 test('customer cannot open admin and switching account clears private screen', async ({
   page,
