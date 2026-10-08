@@ -80,6 +80,7 @@ Normalization cases: null→(1,20,0), (0,0)→(1,1,0), size1000→50, (int.MaxVa
 **Modify:** Data/ShopDb.cs, ShipmentService.cs, ShipmentEventHandler.cs, ShipmentQueryService.cs, ShipmentEndpoints.cs, existing direct-service verification call sites, ShipmentRabbitMqVerification.cs and migrations/snapshot.
 
 **Interfaces:**
+- ShopDb.ShipmentHistory: DbSet<ShipmentHistory>.
 - ShipmentHistory: long Id (identity PK), Guid ShipmentId, string? FromStatus, string ToStatus, DateTime OccurredAt, string? ActorId (maximum450). Restrictive shipment FK; index ShipmentId/Id.
 - ShipmentService.UpdateStatusAsync(Guid shipmentId, UpdateShipmentStatus request, string actorId, CancellationToken cancellationToken=default): Task<ShipmentUpdateResult>. Replace the old overload; API supplies NameIdentifier, internal fixtures use a fixed verification actor.
 - ShipmentHistoryEntryResponse(long Id, string? FromStatus, string ToStatus, DateTime OccurredAt, string? ActorId), From(ShipmentHistory) normalizes UTC.
@@ -125,7 +126,7 @@ Check(rows.Count == 3 && rows[1].FromStatus == "Pending" && rows[2].FromStatus =
 **Modify:** Data/ShopDb.cs, Program.cs, migration/snapshot and API/workflow/docs index.
 
 **Interfaces:**
-- ShopDb.ReturnRequests: DbSet<ReturnRequest>; ShopDb.ShipmentHistory: DbSet<ShipmentHistory>.
+- ShopDb.ReturnRequests: DbSet<ReturnRequest>.
 - ReturnRequest fields exactly as spec: Guid Id/OrderId/PaymentId; string IdempotencyKey(max100), Reason(max500), Status="Requested"; UTC CreatedAt; nullable ApprovedAt/ReceivedAt/CompletedAt. Unique OrderId; restrictive order/payment FKs; Status/CreatedAt/Id list index with descending dates/IDs.
 - CreateReturn(string? Reason).
 - ReturnError {InvalidRequest,NotFound,Conflict}; ReturnResult(ReturnRequest? Return, ReturnError? Error=null, string? Detail=null, bool Replayed=false).
