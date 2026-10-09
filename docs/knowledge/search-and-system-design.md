@@ -192,7 +192,7 @@ Use a concrete failure to test the design. For example: “SQL saved the order, 
 
 - Trace a checkout through [OrdersController](../../src/Ecommerce.Api/Features/Orders/Controllers/OrdersController.cs), its transaction, and the Outbox. Compare the result with [HTTP checks](../../tests/http/verify_checkout_http.py).
 - Try the existing search filters, sorts, and page bounds. Inspect the cache key and Elasticsearch request, then measure them with a larger catalog. Consider facets or autocomplete as a separate enhancement.
-- Follow an `OrderPaid` event into shipment creation, history, and [returns](../fulfillment.md). Identify which changes share a transaction and which happen later.
+- Follow an `OrderPaid` event into shipment creation, history, and returns (removed feature). Identify which changes share a transaction and which happen later.
 - Use the existing [telemetry viewer](../observability.md) and [health checks](../health.md) to inspect a dependency outage. Explain what a healthy response does and does not establish.
 - Plan coordination of Outbox workers and migrations before running multiple API replicas. The current local setup uses one API instance.
 - Design provider callbacks and reconciliation before adding a real payment integration. Current payment/refund outcomes use a [Development simulator](../payments.md).

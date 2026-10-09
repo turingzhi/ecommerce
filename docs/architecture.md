@@ -13,7 +13,7 @@ The default Compose stack has five services:
 | Service | Role |
 | --- | --- |
 | API | Authentication, commerce rules, storefront assets, and workers |
-| SQL Server | Products, inventory, customer identities, orders, payments, refunds, shipments, returns, Outbox, and processed event IDs |
+| SQL Server | Products, inventory, customer identities, orders, payments, refunds, Outbox, and processed event IDs |
 | RabbitMQ | Durable event delivery and retry/dead-letter queues |
 | Elasticsearch | Product search projection; SQL remains authoritative for checkout |
 | Redis | Search responses cached for 30 seconds and customer carts expiring after seven days of inactivity |
@@ -30,7 +30,6 @@ flowchart LR
     SQL --> Outbox[Outbox worker]
     Outbox --> Rabbit[RabbitMQ]
     Rabbit --> Consumer[Event consumer]
-    Consumer -->|OrderPaid: shipment and history| SQL
     Consumer -->|ProductUpserted| Search[(Elasticsearch)]
     Consumer -->|ProductUpserted: increment generation| Redis[(Redis)]
     Endpoint -->|Search cache and cart| Redis
@@ -63,7 +62,7 @@ See [project structure](project-structure.md) for folder conventions.
 
 ## Design details
 
-[Workflows](workflows.md) covers stock, idempotency, payment states, and returns. [RabbitMQ](rabbitmq.md) explains delivery guarantees; [product synchronization](product-sync.md) and [Redis](redis.md) explain the search projection and its cache. [Payments](payments.md), [fulfillment](fulfillment.md), [cart](cart.md), and [storefront](storefront.md) describe those features. The [API reference](api.md) lists routes and authorization rules.
+[Workflows](workflows.md) covers stock, idempotency, payment states, and refunds. [RabbitMQ](rabbitmq.md) explains delivery guarantees; [product synchronization](product-sync.md) and [Redis](redis.md) explain the search projection and its cache. [Payments](payments.md), [cart](cart.md), and [storefront](storefront.md) describe those features. The [API reference](api.md) lists routes and authorization rules.
 
 ## Dependency lifetimes
 

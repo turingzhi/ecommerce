@@ -3,12 +3,15 @@
 A learning project built with ASP.NET Core (.NET 10) and React + TypeScript.
 It includes a storefront, an API, and local Docker services.
 
+> Shipment and return features have been removed. Existing database tables and
+> historical migrations are preserved for compatibility; no stored data is deleted.
+
 ## What it does
 
 - Browse, search, and sort products; view product details.
 - Register, sign in, manage a cart, and check out with stock checks.
-- Create orders and payment attempts, cancel eligible orders, and request refunds or returns.
-- Manage products, shipments, and returns; read orders and payments across customers.
+- Create orders and payment attempts, cancel eligible orders, and request refunds.
+- Manage products; read orders and payments across customers.
 - Record metrics and traces with OpenTelemetry.
 
 Payments and refunds are simulated. The application does not charge real money.
@@ -50,13 +53,12 @@ See the [Docker guide](docs/docker.md) for service ports and basic commands, or
 
 ## Admin access
 
-To enable an account with all five current admin permissions, set
+To enable an account with all three current admin permissions, set
 `DEFAULT_ADMIN_ENABLED`, `DEFAULT_ADMIN_EMAIL`, and `DEFAULT_ADMIN_PASSWORD` in
 `.env`, then recreate the API. Follow the [admin guide](docs/admin.md).
 Existing account passwords are preserved on restart.
 
 The storefront has Products admin, Orders admin, and Payments admin pages.
-Shipment and return administration uses the API.
 
 ## Catalog and search
 
@@ -101,7 +103,7 @@ It explains login, metrics, traces, and temporary telemetry storage.
 - Background workers assume one API instance; rate-limit counters are per process.
 - Redis carts are temporary, and dashboard telemetry has no persistent storage.
 - Search updates asynchronously; direct SQL edits bypass catalog synchronization.
-- Returns do not automatically restock products. User management and unrestricted order/payment edits are not implemented.
+- User management and unrestricted order/payment edits are not implemented.
 - Compose is for local development. Production deployment and continuous delivery are not configured.
 
 See the [DI, database, and Redis review](docs/architecture-review.md) for known

@@ -1,5 +1,5 @@
 import type { RequestOptions } from '../api/client';
-export type OperationKind = 'checkout' | 'payment' | 'return';
+export type OperationKind = 'checkout' | 'payment';
 const namespace = (user: string, kind: OperationKind, resource: string) =>
   `ecommerce:operation:v1:${encodeURIComponent(user)}:${kind}:${encodeURIComponent(resource)}`;
 export const OperationKeys = {

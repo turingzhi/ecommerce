@@ -34,7 +34,7 @@ def main():
     reader = login(reader_email, password)
     request("GET", "/admin/payments", token=reader)
     request("GET", "/admin/orders", token=reader, expected=403)
-    for path in ["/admin/products", "/admin/shipments", "/admin/returns"]:
+    for path in ["/admin/products"]:
         request("GET", path, token=admin, expected=403)
     # Existing catalog permission grants no new read permission.
     compose("exec", "-T", "ecommerce", "dotnet", "Ecommerce.Api.dll", "--grant-product-admin", reader_email)

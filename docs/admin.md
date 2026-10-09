@@ -2,11 +2,11 @@
 
 [Documentation index](README.md) · [API reference](api.md) · [Storefront](storefront.md)
 
-Admin access consists of five independent permissions. Customer routes still check ownership, and admin actions still enforce financial and state rules. Run the commands below from the repository root.
+Admin access consists of three independent permissions. Customer routes still check ownership, and admin actions still enforce financial and state rules. Run the commands below from the repository root.
 
 ## Default account
 
-To create a local account with all five permissions, set your own credentials in `.env`:
+To create a local account with all three permissions, set your own credentials in `.env`:
 
 ```dotenv
 DEFAULT_ADMIN_ENABLED=true
@@ -39,10 +39,8 @@ Invalid email or missing/invalid initial credentials stop setup without printing
 | `products:manage` | List, create, edit products | Products admin |
 | `orders:read` | Read orders across customers | Orders admin |
 | `payments:read` | Read payment attempts across customers | Payments admin |
-| `shipments:manage` | List shipments, read history, update status/tracking | API only |
-| `returns:manage` | List/update returns and create eligible refunds | API only |
 
-There is no universal admin bypass, user-management page, or unrestricted order/payment editor. Product deletion and stock editing are not provided. Shipment/return workflows are in [fulfillment](fulfillment.md).
+There is no universal admin bypass, user-management page, or unrestricted order/payment editor. Product deletion and stock editing are not provided.
 
 To grant only selected permissions to an already registered account, run the commands it needs:
 
@@ -50,8 +48,6 @@ To grant only selected permissions to an already registered account, run the com
 docker compose exec -T ecommerce dotnet Ecommerce.Api.dll --grant-product-admin operator@example.com
 docker compose exec -T ecommerce dotnet Ecommerce.Api.dll --grant-order-reader operator@example.com
 docker compose exec -T ecommerce dotnet Ecommerce.Api.dll --grant-payment-reader operator@example.com
-docker compose exec -T ecommerce dotnet Ecommerce.Api.dll --grant-shipment-admin operator@example.com
-docker compose exec -T ecommerce dotnet Ecommerce.Api.dll --grant-return-admin operator@example.com
 ```
 
 Grants are independent and repeat-safe. There is no public grant endpoint. Log in again after granting access; ordinary customers cannot supply permissions in a request.

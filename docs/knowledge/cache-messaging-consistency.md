@@ -1,3 +1,6 @@
+> Historical note: shipment and return features have been removed. Examples below
+> that refer to them describe earlier implementation, not current application behavior.
+
 # Caching, messaging, and consistency
 
 [Learning index](README.md) · [Documentation index](../README.md)
@@ -229,7 +232,7 @@ Once a client sees a newer version, it should not later see an older one. Switch
 
 [OutboxDispatcher](../../src/Ecommerce.Api/Infrastructure/Messaging/Outbox/OutboxDispatcher.cs) marks publication only after broker confirmation. Its retry counter differs from the consumer's counter; see [failure classification](../rabbitmq.md) for exact limits.
 
-[EventConsumer](../../src/Ecommerce.Api/Infrastructure/Messaging/EventConsumer.cs) applies `ProductUpserted` snapshots to Elasticsearch and changes the cache generation. Product versions stop an older event replacing a newer search document. `OrderPaid` goes to [ShipmentEventHandler](../../src/Ecommerce.Api/Features/Shipments/Services/ShipmentEventHandler.cs), which checks SQL payment/order state and protects shipment creation with locks and uniqueness. See [product synchronization](../product-sync.md) and [fulfillment](../fulfillment.md).
+[EventConsumer](../../src/Ecommerce.Api/Infrastructure/Messaging/EventConsumer.cs) applies `ProductUpserted` snapshots to Elasticsearch and changes the cache generation. Product versions stop an older event replacing a newer search document. `OrderPaid` goes to [ShipmentEventHandler](../../src/Ecommerce.Api/Features/Shipments/Services/ShipmentEventHandler.cs), which checks SQL payment/order state and protects shipment creation with locks and uniqueness. See [product synchronization](../product-sync.md) and fulfillment (removed feature).
 
 ---
 

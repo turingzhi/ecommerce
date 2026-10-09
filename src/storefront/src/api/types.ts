@@ -51,25 +51,6 @@ export interface Refund {
   status: string;
   createdAt: string;
 }
-export interface Tracking {
-  orderId: string;
-  orderStatus: string;
-  shipment: { id: string; status: string; trackingNumber?: string; createdAt: string } | null;
-  history: { fromStatus: string | null; toStatus: string; occurredAt: string }[];
-}
-export interface Return {
-  id: string;
-  orderId: string;
-  reason: string;
-  status: string;
-  currency: string;
-  originalAmountCents: number;
-  refundedCents: number;
-  reservedRefundCents: number;
-  remainingRefundableCents: number;
-  createdAt: string;
-}
-
 export interface AdminOrderSummary extends OrderSummary {
   customerId: string;
 }

@@ -1,7 +1,7 @@
 # Storefront
 
 React + TypeScript with Vite. The interface includes products, accounts, carts,
-orders, payment status, tracking, returns, and admin pages.
+orders, payment status, refunds, and admin pages.
 
 ## Develop
 

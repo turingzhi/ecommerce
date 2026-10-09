@@ -1,3 +1,5 @@
+// Schema compatibility only: preserve historical EF entity names and table mappings.
+// No shipment or return business logic remains in the application.
 namespace Ecommerce.Features.Returns.Models;
 public class ReturnRequest
 {

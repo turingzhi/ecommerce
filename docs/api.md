@@ -140,47 +140,6 @@ Code: [payment endpoints](../src/Ecommerce.Api/Features/Payments/Controllers/Pay
 
 The routes exist only in Development; default Compose returns 404. Outcomes are simulated and transfer no money. `Unknown` can later resolve to success or failure; terminal outcomes cannot be changed. See [activation and outcome rules](payments.md#development-simulation).
 
-## Fulfillment and returns
-
-All routes below use no-store. Owner routes require authentication; admin routes require the listed independent permission. Missing/unowned customer records return 404. Admin callers without permission receive 403 before lookup.
-
-### Shipment read
-
-| Route | Access / response |
-| --- | --- |
-| `GET /orders/{orderId}/shipment` | Owner; `{id,orderId,status,createdAt,trackingNumber,shippedAt,deliveredAt}` |
-| `GET /orders/{orderId}/tracking` | Owner; `{orderId,orderStatus,shipment,history}` |
-| `GET /admin/shipments` | `shipments:manage`; `{page,pageSize,shipments}` |
-| `GET /admin/shipments/{shipmentId}/history` | `shipments:manage`; `{shipmentId,history}` |
-
-`OrderPaid` consumption creates one `Pending` shipment asynchronously. The shipment read returns 404 while absent; tracking returns null shipment and empty history for an owned order without fulfillment. Customer history exposes `fromStatus,toStatus,occurredAt`; admin history adds `id,actorId`. History sorts by increasing internal ID. Dates are UTC; tracking details are null before their transitions.
-
-### Admin shipment status
-
-`PUT /admin/shipments/{shipmentId}/status` requires `shipments:manage`. Send `{ "status": "Shipped", "trackingNumber": "TRACK-001" }`, then `{ "status": "Delivered" }`. Status and history commit together. Repeated equivalent requests return 200 without changing timestamps or adding history. Invalid status/tracking returns 400; missing shipments 404; reset, skipped/backward states, or changed tracking 409.
-
-Tracking trims to 1–100 characters without control characters. Shipping requires it. Delivery may omit it; a supplied value must match the saved number. See [fulfillment](fulfillment.md#admin-shipment-updates).
-
-### Whole-order returns
-
-| Route | Access / request / success |
-| --- | --- |
-| `POST /orders/{orderId}/returns` | Owner + key; `{ "reason": "Damaged" }`; 201 new, 200 replay |
-| `GET /orders/{orderId}/return` | Owner; return with current refund totals |
-| `GET /admin/returns` | `returns:manage`; `{page,pageSize,returns}` |
-| `PUT /admin/returns/{returnId}/status` | `returns:manage`; `{ "status": "Approved" }`; 200 transition/replay |
-| `POST /admin/returns/{returnId}/refund` | `returns:manage` + key; `{ "amountCents": 2000 }`; 201 new, 200 replay |
-
-One whole-order return is allowed after a paid order's shipment is delivered and before it is fully refunded. Reasons trim to 1–500 characters; keys are nonblank, at most 100 characters, and scoped to the order. Same key/reason replays even after completion; another key/reason conflicts. Invalid input returns 400, missing records 404, and state/eligibility conflicts 409.
-
-Returns move `Requested → Approved → Received → Completed`, one step at a time. Reset to `Requested` is rejected; repeats preserve timestamps. New admin refunds require `Received` and share the existing refund ledger/key rules. After completion, an existing refund key can replay. Completion requires the full original amount successfully refunded with no unresolved refunds. Stock, payment, and order status stay unchanged.
-
-Return fields: `id,orderId,paymentId,reason,status,createdAt,approvedAt,receivedAt,completedAt,currency,originalAmountCents,refundedCents,reservedRefundCents,remainingRefundableCents`. Successful refunds count as refunded; `Pending`/`Unknown` as reserved; failed amounts count as neither. Remaining is original minus refunded minus reserved.
-
-Shipment/return admin lists default to 1/20, normalize nonpositive values to 1, cap size at 50, and return empty extreme offsets. They sort newest date then ID first and accept exact case-sensitive `status`: `Pending|Shipped|Delivered` or `Requested|Approved|Received|Completed`. Blank, whitespace-padded, or unknown status values and malformed numbers return 400. Return pages may shrink if matching records advance while being read.
-
-Code: [shipment endpoints](../src/Ecommerce.Api/Features/Shipments/Controllers/ShipmentsController.cs), [return endpoints](../src/Ecommerce.Api/Features/Returns/Controllers/ReturnsController.cs), [shipment contracts](../src/Ecommerce.Api/Features/Shipments/Contracts), and [return contracts](../src/Ecommerce.Api/Features/Returns/Contracts). See [fulfillment examples](fulfillment.md).
-
 ## Operator order and payment reads
 
 | Route | Permission / response |
@@ -212,10 +171,10 @@ Dependency reports contain generic statuses, never connection details or excepti
 | Shared policy | Default per 60 seconds | Routes |
 | --- | --- | --- |
 | Catalog | 120 per connection IP | Browse, search, product detail |
-| Order writes | 30 per customer | Order creation, cart checkout, return requests |
+| Order writes | 30 per customer | Order creation, cart checkout |
 | Payment writes | 20 per customer | Payment creation, customer refund creation, both Development simulators |
 
-Cached searches, invalid requests, and retries count. Other routes, including admin return refunds, have no assigned write policy. Limits are configurable and local to the API process. A rejection returns 429, integer-second `Retry-After`, no-store, and `{ "error": "Too many requests. Please retry later." }`. It never reaches the handler. Authentication/authorization precedes customer limiting. See [rate limiting](rate-limiting.md).
+Cached searches, invalid requests, and retries count. Other routes, have no assigned write policy. Limits are configurable and local to the API process. A rejection returns 429, integer-second `Retry-After`, no-store, and `{ "error": "Too many requests. Please retry later." }`. It never reaches the handler. Authentication/authorization precedes customer limiting. See [rate limiting](rate-limiting.md).
 
 ## Error responses and retrying requests
 

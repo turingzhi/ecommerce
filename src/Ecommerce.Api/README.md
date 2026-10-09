@@ -6,7 +6,7 @@ workers for orders and messaging.
 ## Find the code
 
 - `Program.cs`: configuration, service registration, startup, and route mapping.
-- `Features`: accounts, catalog, cart, orders, payments, refunds, shipments, and returns.
+- `Features`: accounts, catalog, cart, orders, payments, and refunds.
 - `Features/*/Controllers`: HTTP routes for each feature.
 - `Features/*/Services`: business rules and database operations.
 - `Infrastructure`: SQL persistence and migrations, RabbitMQ, search, and health checks.

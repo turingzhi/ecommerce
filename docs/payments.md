@@ -54,7 +54,7 @@ curl -i -X POST "http://127.0.0.1:5088/dev/payments/$PAYMENT_ID/simulate" \
 
 `Unknown` blocks another attempt, cancellation, and expiration; it can later resolve to success or failure. Terminal results cannot change to another outcome. Repeating the same outcome returns the current result without duplicate events; no outcome idempotency key is needed. Use a fresh order/payment to explore a different terminal outcome.
 
-Simulation leaves stock unchanged because checkout already reserved it. Cancellation after failed attempts restores stock; paid orders cannot be cancelled. `OrderPaid` triggers [asynchronous fulfillment](fulfillment.md#shipments).
+Simulation leaves stock unchanged because checkout already reserved it. Cancellation after failed attempts restores stock; paid orders cannot be cancelled. `OrderPaid` triggers asynchronous fulfillment (removed feature).
 
 ## Create a refund
 
@@ -78,7 +78,7 @@ Amounts are positive Int64 cents; keys are nonblank and at most 100 characters (
 
 Remaining balance is the original payment minus `Succeeded`, `Pending`, and `Unknown` refunds. A `Pending` or `Unknown` refund also blocks any different key. `Failed` amounts do not consume balance and may be retried with a new key. For a 5000-cent payment, a successful 2000-cent refund leaves 3000; a later 3001 is rejected.
 
-Refunds keep the order `Paid`, the payment `Succeeded`, and stock unchanged. Customer refunds and [received-return admin refunds](fulfillment.md#return-refunds-and-completion) share the same ledger and cap.
+Refunds keep the order `Paid`, the payment `Succeeded`, and stock unchanged. Customer refunds and received-return admin refunds (removed feature) share the same ledger and cap.
 
 ## Simulate a refund
 

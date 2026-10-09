@@ -7,10 +7,10 @@
 | Routes | Shared partition | Default allowance |
 | --- | --- | --- |
 | `GET /products`, `GET /products/{productId}`, `GET /products/search` | Connection remote IP, including authenticated callers | 120 per 60 seconds |
-| `POST /orders`, `POST /cart/checkout`, `POST /orders/{orderId}/returns` | Authenticated customer ID | 30 per 60 seconds |
+| `POST /orders`, `POST /cart/checkout` | Authenticated customer ID | 30 per 60 seconds |
 | Payment/refund creation and their Development-only simulators | Authenticated customer ID across that customer's orders/payments | 20 per 60 seconds |
 
-The last policy covers `POST /orders/{orderId}/payments`, `POST /payments/{paymentId}/refunds`, `POST /dev/payments/{paymentId}/simulate`, and `POST /dev/refunds/{refundId}/simulate`. The admin return-refund route has no rate-limit policy.
+The last policy covers `POST /orders/{orderId}/payments`, `POST /payments/{paymentId}/refunds`, `POST /dev/payments/{paymentId}/simulate`, and `POST /dev/refunds/{refundId}/simulate`.
 
 Each policy uses an independent fixed window with no request queue. Invalid requests, cache hits, and idempotent retries consume permits. Other routes, including registration, login, order/payment/refund reads, cancellation, and health checks, have no policy.
 

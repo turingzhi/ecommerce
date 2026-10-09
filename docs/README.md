@@ -18,7 +18,6 @@ Commands run from the repository root unless a guide says otherwise.
 
 - [Cart](cart.md): quantities, expiration, and checkout.
 - [Payments and refunds](payments.md): attempts, balances, and local simulation.
-- [Shipments and returns](fulfillment.md): tracking, operator updates, and return settlement.
 - [Rate limiting](rate-limiting.md): shared quotas and retry behavior.
 
 ## Understand the code

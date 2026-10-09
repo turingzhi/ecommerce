@@ -1,3 +1,6 @@
+> Historical note: shipment and return features have been removed. Examples below
+> that refer to them describe earlier implementation, not current application behavior.
+
 # DI, database, and Redis review
 
 [Documentation index](README.md) · [Architecture](architecture.md) · [Learning guide](knowledge/README.md)

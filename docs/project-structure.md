@@ -19,9 +19,7 @@ Ecommerce/
 │   │   │   ├── Cart/
 │   │   │   ├── Orders/
 │   │   │   ├── Payments/
-│   │   │   ├── Refunds/
-│   │   │   ├── Shipments/
-│   │   │   └── Returns/
+│   │   │   └── Refunds/
 │   │   ├── Infrastructure/
 │   │   │   ├── Persistence/Migrations/
 │   │   │   ├── Messaging/

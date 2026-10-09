@@ -247,7 +247,6 @@ public static partial class VerificationRunner
             await worker.StopAsync(CancellationToken.None);
             await DeleteVerificationDatabase(dbOptions);
         }
-        await VerifyRabbitMqShipmentRecoveryAsync();
         Console.WriteLine("RabbitMQ verification passed.");
     }
 

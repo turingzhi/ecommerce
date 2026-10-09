@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthProvider';
-import { apiRequest, ApiError } from '../../api/client';
-import type { Order, Payment, Refund, Return, Tracking } from '../../api/types';
+import { apiRequest } from '../../api/client';
+import type { Order, Payment, Refund } from '../../api/types';
 import { usePrivateRequest } from '../../hooks/usePrivateRequest';
 import { useLatestRequest } from '../../hooks/useLatestRequest';
 import { ErrorNotice } from '../../components/ErrorNotice';
-import { StatusTimeline } from '../../components/StatusTimeline';
 import { formatMoney, totalCents } from '../../lib/money';
 import { ensurePayment, OperationKeys } from '../../lib/operationKeys';
 export function OrderItems({ order }: { order: Order }) {
@@ -36,8 +35,7 @@ export function OrderDetailsPage() {
   const auth = useAuth();
   const [revision, setRevision] = useState(0),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState<unknown>(null),
-    [reason, setReason] = useState('');
+    [error, setError] = useState<unknown>(null);
   const config = useLatestRequest(
     (signal) => apiRequest<{ paymentSimulationEnabled: boolean }>('/ui/config', { signal }),
     [],
@@ -49,18 +47,6 @@ export function OrderDetailsPage() {
         `/orders/${id}/payments?pageSize=50`,
         { signal },
       );
-      const optional = async <T,>(path: string) => {
-        try {
-          return await request<T>(path, { signal });
-        } catch (e) {
-          if (e instanceof ApiError && e.status === 404) return null;
-          throw e;
-        }
-      };
-      const [tracking, returned] = await Promise.all([
-        optional<Tracking>(`/orders/${id}/tracking`),
-        optional<Return>(`/orders/${id}/return`),
-      ]);
       const refunds = await Promise.all(
         paymentList.payments.map(async (p) => ({
           payment: p,
@@ -71,7 +57,7 @@ export function OrderDetailsPage() {
           ).refunds,
         })),
       );
-      return { order, payments: paymentList.payments, tracking, returned, refunds };
+      return { order, payments: paymentList.payments, refunds };
     },
     [id, revision],
   );
@@ -178,69 +164,6 @@ export function OrderDetailsPage() {
             <p className="muted">
               Opening this order reads payments without creating another attempt.
             </p>
-          </section>
-          <section className="panel">
-            {state.data.tracking ? (
-              <StatusTimeline tracking={state.data.tracking} />
-            ) : (
-              <p>No shipment yet. Refresh after payment processing.</p>
-            )}
-          </section>
-          <section className="panel">
-            <h2>Return</h2>
-            {state.data.returned ? (
-              <>
-                <p className="badge">{state.data.returned.status}</p>
-                <p>{state.data.returned.reason}</p>
-                <p>
-                  Refunded:{' '}
-                  {Number.isSafeInteger(state.data.returned.refundedCents)
-                    ? formatMoney(state.data.returned.refundedCents, state.data.returned.currency)
-                    : 'Unsupported amount'}
-                </p>
-                <p>
-                  Remaining refundable:{' '}
-                  {Number.isSafeInteger(state.data.returned.remainingRefundableCents)
-                    ? formatMoney(
-                        state.data.returned.remainingRefundableCents,
-                        state.data.returned.currency,
-                      )
-                    : 'Unsupported amount'}
-                </p>
-              </>
-            ) : state.data.tracking?.shipment?.status === 'Delivered' ? (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void act(async () => {
-                    const key = OperationKeys.getOrCreate(auth.session!.user.userId, 'return', id!);
-                    await auth.request(`/orders/${id}/returns`, {
-                      method: 'POST',
-                      key,
-                      body: { reason },
-                    });
-                    OperationKeys.confirm(auth.session!.user.userId, 'return', id!);
-                  });
-                }}
-              >
-                <label>
-                  Reason
-                  <textarea
-                    required
-                    maxLength={500}
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                  />
-                </label>
-                <p>
-                  After an uncertain request, retry with the same reason. The original return
-                  request takes precedence.
-                </p>
-                <button disabled={busy}>Request whole-order return</button>
-              </form>
-            ) : (
-              <p>Returns become available after delivery.</p>
-            )}
           </section>
           <button className="secondary" disabled={busy} onClick={() => setRevision((x) => x + 1)}>
             Refresh order

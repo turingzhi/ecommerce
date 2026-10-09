@@ -13,7 +13,7 @@ public class DefaultAdminBootstrapperTests
     private const string Email = "admin@example.test";
     private const string Password = "OriginalAdmin!123456";
     private static readonly string[] ExpectedPermissions =
-        ["orders:read", "payments:read", "products:manage", "returns:manage", "shipments:manage"];
+        ["orders:read", "payments:read", "products:manage"];
 
     [Fact]
     public async Task DisabledSetupDoesNotCreateAnAccount()
@@ -52,7 +52,7 @@ public class DefaultAdminBootstrapperTests
         Assert.True(await fixture.Users.CheckPasswordAsync(user, Password));
         Assert.False(await fixture.Users.CheckPasswordAsync(user, options.Password));
         var claims = await fixture.Users.GetClaimsAsync(user);
-        Assert.Equal(6, claims.Count);
+        Assert.Equal(4, claims.Count);
         Assert.Contains(claims, claim => claim.Type == "permission" && claim.Value == "custom:read");
         Assert.Equal(ExpectedPermissions, claims.Where(claim => claim.Type == "permission" && claim.Value != "custom:read")
             .Select(claim => claim.Value).Order().ToArray());
@@ -66,7 +66,7 @@ public class DefaultAdminBootstrapperTests
         await fixture.Seed(new() { Enabled = true, Email = Email, Password = "" });
         var user = Assert.Single(fixture.Store.Users.Values);
         Assert.True(await fixture.Users.CheckPasswordAsync(user, Password));
-        Assert.Equal(5, (await fixture.Users.GetClaimsAsync(user)).Count);
+        Assert.Equal(3, (await fixture.Users.GetClaimsAsync(user)).Count);
     }
 
     [Theory]

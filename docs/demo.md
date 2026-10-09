@@ -19,7 +19,7 @@ For a manual HTTP walkthrough, use [auth](../requests/auth.http),
 
 To continue through payment success, delivery, and a return, enable
 [Development simulation](payments.md#development-simulation), then follow
-[fulfillment](fulfillment.md). Admin actions need [permissions](admin.md).
+fulfillment (removed feature). Admin actions need [permissions](admin.md).
 
 ## Outage and recovery: Elasticsearch goes offline
 

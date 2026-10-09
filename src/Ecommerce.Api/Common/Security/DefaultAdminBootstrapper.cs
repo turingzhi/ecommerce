@@ -3,8 +3,6 @@ using System.Security.Claims;
 using Ecommerce.Features.Catalog.Services;
 using Ecommerce.Features.Orders.Services;
 using Ecommerce.Features.Payments.Services;
-using Ecommerce.Features.Returns.Services;
-using Ecommerce.Features.Shipments.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 
@@ -34,8 +32,8 @@ public sealed class DefaultAdminBootstrapper(UserManager<IdentityUser> users,
         // The configured password is only for initial creation. An existing
         // account retains its password, security stamp and profile on startup.
         var saved = await users.GetClaimsAsync(user);
-        string[] permissions = [ProductAdministration.Permission, ShipmentAdministration.Permission,
-            ReturnAdministration.Permission, OrderAdministration.Permission, PaymentAdministration.Permission];
+        string[] permissions = [ProductAdministration.Permission,
+            OrderAdministration.Permission, PaymentAdministration.Permission];
         var missing = permissions.Where(permission => !saved.Any(claim =>
                 claim.Type == "permission" && claim.Value == permission))
             .Select(permission => new Claim("permission", permission)).ToArray();

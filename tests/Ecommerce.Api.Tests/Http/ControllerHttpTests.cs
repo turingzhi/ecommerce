@@ -7,8 +7,6 @@ using Ecommerce.Common.RateLimiting;
 using Ecommerce.Features.Catalog.Services;
 using Ecommerce.Features.Orders.Services;
 using Ecommerce.Features.Payments.Services;
-using Ecommerce.Features.Returns.Services;
-using Ecommerce.Features.Shipments.Services;
 using Ecommerce.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
@@ -49,10 +47,6 @@ public class ControllerHttpTests : IClassFixture<ControllerHost>
         yield return ["GET", $"/refunds/{Id}"];
         yield return ["GET", $"/payments/{Id}/refunds"];
         yield return ["POST", $"/payments/{Id}/refunds"];
-        yield return ["GET", $"/orders/{Id}/shipment"];
-        yield return ["GET", $"/orders/{Id}/tracking"];
-        yield return ["GET", $"/orders/{Id}/return"];
-        yield return ["POST", $"/orders/{Id}/returns"];
         yield return ["GET", "/admin/products"];
         yield return ["POST", "/admin/products"];
         yield return ["PUT", "/admin/products/1"];
@@ -60,12 +54,30 @@ public class ControllerHttpTests : IClassFixture<ControllerHost>
         yield return ["GET", $"/admin/orders/{Id}"];
         yield return ["GET", "/admin/payments"];
         yield return ["GET", $"/admin/payments/{Id}"];
+    }
+
+    public static IEnumerable<object[]> DisabledRoutes()
+    {
+        yield return ["GET", $"/orders/{Id}/shipment"];
+        yield return ["GET", $"/orders/{Id}/tracking"];
+        yield return ["GET", $"/orders/{Id}/return"];
+        yield return ["POST", $"/orders/{Id}/returns"];
         yield return ["GET", "/admin/shipments"];
         yield return ["PUT", $"/admin/shipments/{Id}/status"];
         yield return ["GET", $"/admin/shipments/{Id}/history"];
         yield return ["GET", "/admin/returns"];
         yield return ["PUT", $"/admin/returns/{Id}/status"];
         yield return ["POST", $"/admin/returns/{Id}/refund"];
+    }
+
+    [Theory]
+    [MemberData(nameof(DisabledRoutes))]
+    public async Task Shipment_and_return_routes_are_unavailable(string method, string path)
+    {
+        using var request = CustomerRequest(new HttpMethod(method), path);
+        request.Headers.Add("X-Permissions", "shipments:manage,returns:manage");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Theory]
@@ -80,8 +92,6 @@ public class ControllerHttpTests : IClassFixture<ControllerHost>
     [InlineData("/admin/products")]
     [InlineData("/admin/orders")]
     [InlineData("/admin/payments")]
-    [InlineData("/admin/shipments")]
-    [InlineData("/admin/returns")]
     public async Task Admin_reads_reject_customers_without_permission(string path)
     {
         using var request = CustomerRequest(HttpMethod.Get, path);
@@ -214,8 +224,6 @@ public sealed class ControllerHost : IAsyncLifetime, IAsyncDisposable
             options.AddPolicy(ProductAdministration.Policy, policy => policy.RequireClaim("permission", ProductAdministration.Permission));
             options.AddPolicy(OrderAdministration.Policy, policy => policy.RequireClaim("permission", OrderAdministration.Permission));
             options.AddPolicy(PaymentAdministration.Policy, policy => policy.RequireClaim("permission", PaymentAdministration.Permission));
-            options.AddPolicy(ShipmentAdministration.Policy, policy => policy.RequireClaim("permission", ShipmentAdministration.Permission));
-            options.AddPolicy(ReturnAdministration.Policy, policy => policy.RequireClaim("permission", ReturnAdministration.Permission));
         });
         builder.Services.AddCommerceRateLimiting(builder.Configuration);
         builder.Services.Configure<CommerceRateLimitOptions>(options => options.SearchPermitLimit = searchPermits);

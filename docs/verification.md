@@ -53,9 +53,7 @@ the separate `EcommerceVerification` database and retains its test rows. They us
 | `--verify-sqlserver` | Concurrent requests, lock behavior, and stock/payment/refund conflicts |
 | `--verify-catalog` | Catalog versions, stock preservation, and write atomicity |
 | `--verify-telemetry` | Safe telemetry and saved Outbox trace context |
-| `--verify-shipments` | Shipment creation, history/status races, constraints, and rollback |
-| `--verify-returns` | Return rules, refund/completion races, and rollback |
-| `--verify-rabbitmq` | Confirms, retries, dead letters, duplicates, fulfillment, and trace correlation |
+| `--verify-rabbitmq` | Confirms, retries, dead letters, duplicates and trace correlation |
 | `--verify-product-sync` | SQL → Outbox → RabbitMQ → Elasticsearch and outage recovery |
 
 For shared broker checks, stop the API consumer so it cannot take test messages.
@@ -96,18 +94,13 @@ relevant response/state rules as well as the behavior listed below.
 | `verify_payment_simulation_http.py` | Simulator access, outcomes, and repeat-safe events | Use `--disabled` against the default API |
 | `verify_refund_http.py` | Refund validation, balances, and replay | `--development` for outcomes |
 | `verify_financial_reads_http.py` | Payment/refund details, ownership, and history pagination | `--development` for populated history |
-| `verify_shipment_http.py` | Paid-event shipment creation and owner reads | `--development` |
-| `verify_shipment_status_http.py` | Shipment transitions, tracking, and replay | `--development` |
-| `verify_fulfillment_http.py` | Shipment lists/history and private owner tracking | `--development` |
-| `verify_returns_http.py` | Return lifecycle, permissions, and settlement | `--development` |
 | `verify_rate_limit_http.py` | Independent quotas, 429, Retry-After, and recovery | Run last with default limits; waits about one minute |
 
 HTTP and browser checks leave fresh accounts/products/orders/payments in the local
 application database. Some checks reserve stock; startup does not refill it.
 [Demo maintenance](../tools/demo/README.md) can refresh retained product names.
 
-Default shipment/return checks use isolated SQL-seeded fixtures. Development mode
-exercises real paid events through RabbitMQ and simulated refund outcomes.
+Development mode exercises simulated payment and refund outcomes.
 Outage checks restore services in cleanup, but forced termination can prevent it;
 run them on a local test stack and inspect `docker compose ps -a` afterward.
 

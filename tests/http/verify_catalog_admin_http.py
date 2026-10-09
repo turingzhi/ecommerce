@@ -9,14 +9,9 @@ def main():
     marker=uuid4().hex;password="CatalogAdmin!123456";email=f"catalog-admin-{marker}@example.invalid"
     customer=register_and_login(f"catalog-customer-{marker}@example.invalid",password);old=register_and_login(email,password)
     request("GET","/admin/products",expected=401);request("GET","/admin/products",token=customer,expected=403)
-    for permission in ['shipment','return']:
-        other_email=f"catalog-{permission}-{marker}@example.invalid";register_and_login(other_email,password)
-        compose("exec","-T","ecommerce","dotnet","Ecommerce.Api.dll","--grant-"+permission+"-admin",other_email)
-        request("GET","/admin/products",token=login(other_email,password),expected=403)
     for _ in range(2):compose("exec","-T","ecommerce","dotnet","Ecommerce.Api.dll","--grant-product-admin",email)
     check(scalar(f"SELECT COUNT(*) FROM dbo.AspNetUserClaims c JOIN dbo.AspNetUsers u ON u.Id=c.UserId WHERE u.Email='{email}' AND c.ClaimValue='products:manage'")==1,"Duplicate catalog claim")
     request("GET","/admin/products",token=old,expected=403);admin=login(email,password)
-    request("GET","/admin/shipments",token=admin,expected=403);request("GET","/admin/returns",token=admin,expected=403)
     products=[]
     for name,price in [('A',3000),('B',1000),('C',1000)]:
         products.append(request("POST","/admin/products",token=admin,body={"name":marker+' '+name,"description":"Sorting fixture","category":"Catalog-"+marker,"priceCents":price,"available":2},expected=201))

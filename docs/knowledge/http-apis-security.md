@@ -1,3 +1,6 @@
+> Historical note: shipment and return features have been removed. Examples below
+> that refer to them describe earlier implementation, not current application behavior.
+
 # HTTP, ASP.NET Core, and security
 
 [Learning index](README.md) · [Documentation index](../README.md)

@@ -79,14 +79,6 @@ jobs:
         run: python3 tests/http/verify_cart_http.py --outages
       - name: Verify cart checkout and retries
         run: python3 tests/http/verify_cart_checkout_http.py --outages
-      - name: Verify default shipment API
-        run: python3 tests/http/verify_shipment_http.py
-      - name: Verify default shipment administration
-        run: python3 tests/http/verify_shipment_status_http.py
-      - name: Verify fulfillment and returns in default environment
-        run: |
-          python3 tests/http/verify_fulfillment_http.py
-          python3 tests/http/verify_returns_http.py
       - name: Verify default financial read API
         run: python3 tests/http/verify_financial_reads_http.py
       - name: Verify default refund API and simulator absence
@@ -101,14 +93,6 @@ jobs:
         run: python3 tests/http/verify_refund_http.py --development
       - name: Verify payment and refund read workflows
         run: python3 tests/http/verify_financial_reads_http.py --development
-      - name: Verify paid-order shipments
-        run: python3 tests/http/verify_shipment_http.py --development
-      - name: Verify shipment status transitions
-        run: python3 tests/http/verify_shipment_status_http.py --development
-      - name: Verify fulfillment and returns with simulated outcomes
-        run: |
-          python3 tests/http/verify_fulfillment_http.py --development
-          python3 tests/http/verify_returns_http.py --development
       - name: Development storefront lifecycle
         run: STOREFRONT_DEVELOPMENT=1 npm --prefix src/storefront run test:e2e
       - name: Restore default API environment
@@ -119,10 +103,6 @@ jobs:
         run: |
           dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-catalog
           dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-telemetry
-      - name: Verify shipment SQL atomicity
-        run: dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-shipments
-      - name: Verify return SQL rules and concurrency
-        run: dotnet run --project src/Ecommerce.Api/Ecommerce.Api.csproj --no-build -- --verify-returns
       - name: Pause API consumer for isolated broker checks
         run: docker compose stop ecommerce
       - name: Verify RabbitMQ delivery

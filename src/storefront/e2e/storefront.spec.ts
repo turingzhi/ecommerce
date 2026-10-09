@@ -156,7 +156,10 @@ test('customer cannot open admin and switching account clears private screen', a
   ).toBeVisible();
 });
 
-test('Development payment, shipping timeline and owner return', async ({ page, request }) => {
+test('Development payment succeeds with shipment and return features disabled', async ({
+  page,
+  request,
+}) => {
   test.skip(process.env.STOREFRONT_DEVELOPMENT !== '1', 'Explicit Development overlay required');
   const fixture = await product(request);
   const owner = await account(request);
@@ -168,64 +171,11 @@ test('Development payment, shipping timeline and owner return', async ({ page, r
   await expect(page.getByRole('button', { name: 'Simulate success' })).toBeVisible();
   const orderId = page.url().split('/orders/')[1];
   await page.getByRole('button', { name: 'Simulate success' }).click();
-  let shipment: any;
-  await expect
-    .poll(
-      async () => {
-        const response = await request.get(`/orders/${orderId}/shipment`, { headers });
-        if (response.status() === 200) shipment = await response.json();
-        return response.status();
-      },
-      { timeout: 30000 },
-    )
-    .toBe(200);
-  const operator = await account(request);
-  execFileSync(
-    'docker',
-    [
-      'compose',
-      'exec',
-      '-T',
-      'ecommerce',
-      'dotnet',
-      'Ecommerce.Api.dll',
-      '--grant-shipment-admin',
-      operator.email,
-    ],
-    { cwd: '../..', stdio: 'pipe' },
-  );
-  const login = await request.post('/auth/login', { data: { email: operator.email, password } });
-  const operatorHeaders = { Authorization: `Bearer ${(await login.json()).accessToken}` };
-  expect(
-    (
-      await request.put(`/admin/shipments/${shipment.id}/status`, {
-        headers: operatorHeaders,
-        data: { status: 'Shipped', trackingNumber: 'BROWSER-TRACK' },
-      })
-    ).status(),
-  ).toBe(200);
-  expect(
-    (
-      await request.put(`/admin/shipments/${shipment.id}/status`, {
-        headers: operatorHeaders,
-        data: { status: 'Delivered' },
-      })
-    ).status(),
-  ).toBe(200);
-  await page.getByRole('button', { name: 'Refresh order' }).click();
-  await expect(page.getByText('Delivered', { exact: true }).first()).toBeVisible();
-  await page.getByLabel('Reason', { exact: true }).fill('Browser whole-order return');
-  await page.getByRole('button', { name: 'Request whole-order return' }).click();
-  await expect(page.getByText('Requested', { exact: true })).toBeVisible();
-  const tracking = await request.get(`/orders/${orderId}/tracking`, { headers });
-  expect(JSON.stringify(await tracking.json())).not.toContain('actorId');
-  expect(
-    (
-      await request.get(`/orders/${orderId}/return`, {
-        headers: { Authorization: `Bearer ${operator.token}` },
-      })
-    ).status(),
-  ).toBe(404);
+  await expect(page.getByText('Paid', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Return', exact: true })).toHaveCount(0);
+  for (const feature of ['shipment', 'tracking', 'return']) {
+    expect((await request.get(`/orders/${orderId}/${feature}`, { headers })).status()).toBe(404);
+  }
 });
 
 test('long product text stays inside cards at intermediate and mobile widths', async ({ page }) => {

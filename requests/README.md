@@ -6,7 +6,7 @@ REST Client extension or JetBrains HTTP Client.
 1. Start the [Docker stack](../README.md#run-with-docker-compose).
 2. Open `auth.http` to register and sign in.
 3. Copy the returned token into the bearer-token placeholder in protected requests.
-4. Follow the product, cart, order, payment, shipment, refund, or return examples.
+4. Follow the product, cart, order, payment, or refund examples.
 
 The default API address is `http://127.0.0.1:5088`. Replace sample IDs and
 idempotency keys with values for your own requests.

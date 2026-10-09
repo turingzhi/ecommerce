@@ -6,7 +6,7 @@ import time
 from uuid import uuid4
 from support import assert_no_store, check, compose, login, register_and_login, request, scalar
 
-EXPECTED = ["orders:read", "payments:read", "products:manage", "returns:manage", "shipments:manage"]
+EXPECTED = ["orders:read", "payments:read", "products:manage"]
 
 
 def account_snapshot(email):
@@ -37,7 +37,7 @@ def main():
     token = login(email, password)
     me = request("GET", "/auth/me", token=token)
     check(set(EXPECTED).issubset(me['permissions']), "Default admin is missing a current admin permission")
-    for path in ["/admin/orders", "/admin/payments", "/admin/products", "/admin/shipments", "/admin/returns"]:
+    for path in ["/admin/orders", "/admin/payments", "/admin/products"]:
         request("GET", path, token=token)
         assert_no_store(path, token)
     literal = email.replace("'", "''")
@@ -45,7 +45,7 @@ def main():
     check_expected_claims(me['userId'])
     customer = register_and_login(f"default-admin-customer-{uuid4().hex}@example.invalid", "DefaultAdminCustomer!123456")
     check(request("GET", "/auth/me", token=customer)['permissions'] == [], "Public registration inherited admin permissions")
-    for path in ["/admin/orders", "/admin/payments", "/admin/products", "/admin/shipments", "/admin/returns"]:
+    for path in ["/admin/orders", "/admin/payments", "/admin/products"]:
         request("GET", path, token=customer, expected=403)
     if args.restart:
         before = account_snapshot(email)
@@ -62,7 +62,7 @@ def main():
         check(request("GET", "/auth/me", token=renewed) == me, "Restart changed identity or permissions")
         check(account_snapshot(email) == before, "Restart changed the saved account or password hash")
         check_expected_claims(me['userId'])
-    print("Default admin HTTP passed: login, all five permissions, independent customer registration" + (", repeated-startup account/password preservation" if args.restart else ""))
+    print("Default admin HTTP passed: login, all three permissions, independent customer registration" + (", repeated-startup account/password preservation" if args.restart else ""))
 
 if __name__ == "__main__":
     try:

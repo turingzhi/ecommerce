@@ -8,9 +8,6 @@ using Ecommerce.Features.Catalog.Services;
 using Ecommerce.Features.Orders.Services;
 using Ecommerce.Features.Payments.Services;
 using Ecommerce.Features.Refunds.Services;
-using Ecommerce.Features.Returns.Services;
-using Ecommerce.Features.Shipments.Models;
-using Ecommerce.Features.Shipments.Services;
 using Ecommerce.Infrastructure.Health;
 using Ecommerce.Infrastructure.Messaging;
 using Ecommerce.Infrastructure.Messaging.Outbox;
@@ -46,13 +43,10 @@ if (args.Contains("--verify-product-sync"))
     return;
 }
 
-if (args.Contains("--verify-shipments"))
-{
-    await VerificationRunner.RunShipments();
-    return;
-}
-
-if (args.Contains("--verify-returns")) { await VerificationRunner.RunReturns(); return; }
+// Shipment and return CLI operations are disabled with their HTTP features.
+if (args.Any(arg => arg is "--verify-shipments" or "--verify-returns"
+    or "--grant-shipment-admin" or "--grant-return-admin"))
+    throw new ArgumentException("Shipment and return features are disabled.");
 
 if (args.Contains("--verify-catalog")) { await VerificationRunner.RunCatalog(); return; }
 
@@ -69,9 +63,7 @@ builder.Services
 
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy(ShipmentAdministration.Policy, policy => policy.RequireAuthenticatedUser().RequireClaim("permission", ShipmentAdministration.Permission));
     options.AddPolicy(ProductAdministration.Policy, policy => policy.RequireAuthenticatedUser().RequireClaim("permission", ProductAdministration.Permission));
-    options.AddPolicy(ReturnAdministration.Policy, policy => policy.RequireAuthenticatedUser().RequireClaim("permission", ReturnAdministration.Permission));
     options.AddPolicy(OrderAdministration.Policy, policy => policy.RequireAuthenticatedUser().RequireClaim("permission", OrderAdministration.Permission));
     options.AddPolicy(PaymentAdministration.Policy, policy => policy.RequireAuthenticatedUser().RequireClaim("permission", PaymentAdministration.Permission));
 });
@@ -91,10 +83,6 @@ builder.Services.AddScoped<ProductCatalogService>();
 builder.Services.AddScoped<ProductQueryService>();
 builder.Services.AddScoped<PaymentService>();
 builder.Services.AddScoped<RefundService>();
-builder.Services.AddScoped<ReturnService>();
-builder.Services.AddScoped<ReturnQueryService>();
-builder.Services.AddScoped<ShipmentService>();
-builder.Services.AddScoped<ShipmentQueryService>();
 builder.Services.AddHostedService<OrderExpirationWorker>();
 builder.Services.Configure<RabbitMqOptions>(
     builder.Configuration.GetSection("RabbitMq"));
@@ -133,24 +121,6 @@ using (var scope = app.Services.CreateScope())
 
     await db.Database.MigrateAsync();
 
-    var grantAt = Array.IndexOf(args, "--grant-shipment-admin");
-    if (grantAt >= 0)
-    {
-        if (args.Length != grantAt + 2 || string.IsNullOrWhiteSpace(args[grantAt + 1]))
-            throw new ArgumentException("Usage: --grant-shipment-admin REGISTERED_EMAIL");
-        await ShipmentAdministration.GrantAsync(
-            scope.ServiceProvider.GetRequiredService<UserManager<IdentityUser>>(), args[grantAt + 1]);
-        Console.WriteLine("Shipment admin permission granted. Log in again to get a new bearer token.");
-        return;
-    }
-
-    var returnGrantAt = Array.IndexOf(args, "--grant-return-admin");
-    if (returnGrantAt >= 0)
-    {
-        if (args.Length != returnGrantAt + 2 || string.IsNullOrWhiteSpace(args[returnGrantAt + 1])) throw new ArgumentException("Usage: --grant-return-admin REGISTERED_EMAIL");
-        await ReturnAdministration.GrantAsync(scope.ServiceProvider.GetRequiredService<UserManager<IdentityUser>>(), args[returnGrantAt + 1]);
-        Console.WriteLine("Return admin permission granted. Log in again to get a new bearer token."); return;
-    }
     var productGrantAt = Array.IndexOf(args, "--grant-product-admin");
     if (productGrantAt >= 0)
     {

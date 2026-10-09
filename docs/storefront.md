@@ -26,11 +26,11 @@ An uncertain checkout keeps its original key after cart edits or reload. Sign in
 
 The [Development overlay](payments.md#development-simulation) enables explicitly labelled payment success/failure/timeout controls for pending attempts. Page loads never simulate an outcome. Use the API to resolve an `Unknown` attempt later.
 
-## Orders and returns
+## Orders and refunds
 
-Orders show saved purchased prices, payment attempts, refund reads, and customer-safe shipment history. Refresh after payment success because shipment creation is asynchronous. A pending unpaid order can be cancelled only when no payment is unresolved.
-
-After delivery, request a whole-order return with a reason. For an uncertain response, retry with the same reason and key. Refresh to see status and current financial totals. Operators approve/receive returns, create refunds, and complete settlement through [fulfillment APIs](fulfillment.md). Refund creation and refund simulation have no storefront controls.
+Order details show saved purchase prices, payment attempts, and refund status.
+Eligible unpaid orders can be cancelled; Development exposes payment simulation.
+Shipment tracking and return requests have been removed.
 
 ## Product administrator
 
@@ -40,7 +40,7 @@ A stale edit returns 409 and keeps your form values. Explicitly reload the curre
 
 ## Order and payment operators
 
-Separate `orders:read` and `payments:read` claims reveal Orders admin and Payments admin. These pages provide cross-customer lists/details, status filters, bounded pagination, and refresh. Both claims enable links between records. They are read only and leave customer ownership rules in place. Shipment and return administration uses APIs. See [admin access](admin.md#orders-and-payments).
+Separate `orders:read` and `payments:read` claims reveal Orders admin and Payments admin. These pages provide cross-customer lists/details, status filters, bounded pagination, and refresh. Both claims enable links between records. They are read only and leave customer ownership rules in place. See [admin access](admin.md#orders-and-payments).
 
 ## Catalog presentation and local demo data
 

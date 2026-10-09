@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Project overview](../README.md)
 
-SQL Server is the source of truth for commerce. Search and fulfillment can lag behind a committed event. Payment and refund outcomes are simulations. See the [API reference](api.md) for routes and responses.
+SQL Server is the source of truth for commerce. Search can lag behind a committed event. Payment and refund outcomes are simulations. See the [API reference](api.md) for routes and responses.
 
 ## Customer, order, and stock
 
@@ -71,7 +71,7 @@ A timeout does not emit a payment event. Matching terminal outcomes replay; inco
 
 Refund creation requires a `Paid` order and its `Succeeded` payment. The service locks the payment row, replays a matching key/amount, rejects a changed amount, and allows one unresolved refund at a time. Refunds can be partial, but reserved and successful amounts must stay within the original payment.
 
-Refunds use `Pending`, `Unknown`, `Succeeded`, and `Failed` states like payments. Success reduces the refundable balance; failure releases that amount for another attempt; timeout leaves it unresolved. Refund outcome changes save `RefundSucceeded`, `RefundFailed`, or `RefundUnknown` events. Refunds leave the order `Paid`, preserve stock, and leave fulfillment unchanged. See [payments](payments.md) and [RefundService](../src/Ecommerce.Api/Features/Refunds/Services/RefundService.cs).
+Refunds use `Pending`, `Unknown`, `Succeeded`, and `Failed` states like payments. Success reduces the refundable balance; failure releases that amount for another attempt; timeout leaves it unresolved. Refund outcome changes save `RefundSucceeded`, `RefundFailed`, or `RefundUnknown` events. Refunds leave the order `Paid`, preserve stock, and leave the order unchanged. See [payments](payments.md) and [RefundService](../src/Ecommerce.Api/Features/Refunds/Services/RefundService.cs).
 
 ## Outbox, RabbitMQ, retries, and product search
 
@@ -79,32 +79,13 @@ Refunds use `Pending`, `Unknown`, `Succeeded`, and `Failed` states like payments
 2. The Outbox worker publishes a persistent RabbitMQ message. It marks SQL `PublishedAt` only after confirmation.
 3. The consumer processes the event, saves its ID in `ProcessedMessages`, then acknowledges the delivery. Saved IDs skip repeated work.
 
-There are two active consumer effects:
+Product events update search; other events are recorded as processed:
 
 | Event | Work before acknowledgement |
 | --- | --- |
 | `ProductUpserted` | Index a versioned Elasticsearch snapshot, increment the Redis search generation, and save the processed ID |
-| `OrderPaid` | Validate the paid order/payment and atomically save one shipment, initial history, and the processed ID |
 | Other events | Save the processed ID |
 
 A crash after broker confirmation or before acknowledgement can cause replay. SQL publication retries broker outages with backoff. Consumer retry messages wait about two seconds; the fifth counted processing failure goes to RabbitMQ's dead queue. Database and Elasticsearch outages bypass that consumer limit. SQL Outbox dead-letter flags and RabbitMQ's dead queue are separate. See [RabbitMQ](rabbitmq.md) for exact failure classification and timing.
 
 Search checks the [Redis cache](redis.md), then Elasticsearch on a miss. A valid query returns paginated matches or an empty result; unavailable Elasticsearch returns 503 when no cache result is usable. Catalog writes reach search through the Outbox, so checkout always rechecks SQL price and stock. SQL catalog browse/detail routes read current data directly. See [product synchronization](product-sync.md).
-
-## Fulfillment after payment
-
-```mermaid
-flowchart LR
-    Paid[Paid order] --> Event[OrderPaid delivery]
-    Event --> Pending[Pending shipment]
-    Pending --> Shipped[Shipped with tracking]
-    Shipped --> Delivered[Delivered]
-```
-
-Shipment creation is asynchronous; the owner can receive 404 until the event is consumed. SQL locking and a unique order/shipment relationship keep one shipment even across distinct valid event IDs. Each real transition saves history atomically. Authorized operators move `Pending → Shipped → Delivered`; equivalent replays succeed, while skipped/backward transitions or changed tracking conflict. Order status and stock stay unchanged. See [fulfillment](fulfillment.md).
-
-## Delivered-order returns
-
-An owner can request one whole-order return for a paid, delivered order with some refundable balance. A matching key/reason replays the request. Operators advance `Requested → Approved → Received → Completed`; states cannot be skipped or reversed.
-
-At `Received`, operators create partial or full refunds through the existing refund service. Completion is an explicit action requiring the full payment amount to have succeeded in refunds and no `Pending`/`Unknown` refund. A failed refund contributes no settled amount and can be retried with a new attempt. Returns do not restock inventory. Return mutations lock Order → Payment → Return in that order; refund creation serializes on the payment row. See [fulfillment](fulfillment.md) and [ReturnService](../src/Ecommerce.Api/Features/Returns/Services/ReturnService.cs).

@@ -1,5 +1,4 @@
 using Ecommerce.Features.Catalog.Models;
-using Ecommerce.Features.Shipments.Services;
 using Ecommerce.Infrastructure.Messaging.Models;
 using Ecommerce.Infrastructure.Persistence;
 using Ecommerce.Infrastructure.Search;
@@ -15,9 +14,6 @@ public class EventConsumer(ShopDbContext db, IConnectionMultiplexer? redis = nul
         OutboxMessage message,
         CancellationToken cancellationToken)
     {
-        if (message.Type == "OrderPaid")
-            return await new ShipmentEventHandler(db).HandleAsync(message, cancellationToken);
-
         var alreadyProcessed = await db.ProcessedMessages
             .AnyAsync(p => p.MessageId == message.Id, cancellationToken);
 

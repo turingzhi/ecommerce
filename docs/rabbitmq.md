@@ -32,7 +32,7 @@ On failure, the worker confirms a replacement publication to the retry or dead q
 
 Redis generation failures use the counted policy. The database classification also includes errors that may need a data or code fix; unlimited retry does not prove an outage is temporary. The worker reconnects five seconds after a disconnected session.
 
-For products, indexing and cache invalidation precede the marker; versioned writes tolerate repetition. For paid orders, shipment, initial history, and marker commit together under an order-row lock. See [product synchronization](product-sync.md), [fulfillment](fulfillment.md), and [consumer code](../src/Ecommerce.Api/Infrastructure/Messaging/RabbitMq/RabbitMqConsumerWorker.cs).
+For products, indexing and cache invalidation precede the marker; versioned writes tolerate repetition. For paid orders, shipment, initial history, and marker commit together under an order-row lock. See [product synchronization](product-sync.md), fulfillment (removed feature), and [consumer code](../src/Ecommerce.Api/Infrastructure/Messaging/RabbitMq/RabbitMqConsumerWorker.cs).
 
 ## Local topology
 
