@@ -11,6 +11,7 @@ Commands run from the repository root unless a guide says otherwise.
 - [API reference](api.md): routes, request bodies, responses, and errors.
 - [Local demo](demo.md): checkout and search outage exercises.
 - [Verification](verification.md): unit, SQL, HTTP, browser, and CI checks.
+- [CI and image publishing](ci-cd.md): workflow settings, GHCR, and stage 2 learning exercises.
 - [Health](health.md): liveness and dependency reports.
 - [Metrics and tracing](observability.md): OpenTelemetry and dashboard login.
 
