@@ -1,0 +1,40 @@
+# Optional public HTTPS. Compose loads this automatically beside compose.yaml.
+services:
+  ecommerce:
+    environment:
+      # Demo shortcut: trusts forwarded headers from the private Docker network.
+      # Keep the API port on loopback; only Caddy publishes public web ports.
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+    networks:
+      - default
+      - web
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?Set PUBLIC_HOSTNAME in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - type: bind
+        source: ./Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - web
+    depends_on:
+      ecommerce:
+        condition: service_healthy
+
+networks:
+  web:
+
+volumes:
+  caddy-data:
+  caddy-config:
